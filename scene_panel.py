@@ -721,18 +721,47 @@ class SLS_PT_ShatterObjectDefinitions(bpy.types.Panel):
         if len(obj.shatter_properties) == 0:
             layout.label(text="This entity has no associated properties.")
 
-def ApplyDefinition(obj):
+def ApplyDefinition(obj, clear=True):
     if not hasattr(obj, "shatter_type"):
         return
 
     if obj.shatter_type not in bpy.types.Scene.shatter_definitions:
-        obj.shatter_properties.clear()
+        if clear == True:
+            obj.shatter_properties.clear()
         return
 
-    obj.shatter_properties.clear()
+    if clear == True:
+        obj.shatter_properties.clear()
 
     definitions = bpy.types.Scene.shatter_definitions[obj.shatter_type]
+
+    # Check which definitions are missing
+    existing_names = []
+    for prop in obj.shatter_properties:
+        existing_names.append(prop.name)
+
+    missing_definitions = []
     for definition in definitions:
+        if definition["key"] not in existing_names:
+            missing_definitions.append(definition)
+
+    accounted_props = []
+    for definition in definitions:
+        for prop in obj.shatter_properties:
+            if definition["key"] == prop.name:
+                accounted_props.append(prop.name)
+
+    unaccounted_props = []
+    for prop in obj.shatter_properties:
+        if prop.name not in accounted_props:
+            unaccounted_props.append(prop.name)
+
+    for prop in unaccounted_props:
+        index = obj.shatter_properties.find(prop)
+        if index > -1:
+            obj.shatter_properties.remove(index)
+
+    for definition in missing_definitions:
         item = obj.shatter_properties.add()
         item.name = definition["key"]
         item.type = definition["type"]
@@ -814,8 +843,7 @@ class LoadDefinitions(bpy.types.Operator):
 
     def ApplyDefinitions(self, context):
         for obj in context.scene.objects:
-            if len(obj.shatter_properties) == 0:
-                ApplyDefinition(obj)
+                ApplyDefinition(obj, False)
 
 
 @bpy.app.handlers.persistent

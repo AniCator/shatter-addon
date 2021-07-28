@@ -333,6 +333,10 @@ def GenerateAsset(operator,context,exported,obj):
 def ParseObject(operator,context,exported, obj, recurse = True, parent = None):
     if obj.shatter_export == False:
         return
+
+    for collection in obj.users_collection:
+        if collection.name in context.view_layer.layer_collection.children and context.view_layer.layer_collection.children[collection.name].hide_viewport == True:
+            return
     
     GenerateAsset(operator,context,exported,obj)
 
@@ -783,10 +787,11 @@ class LoadDefinitions(bpy.types.Operator):
         definitions_path = bpy.path.abspath(context.scene.shatter_game_path + "Definitions.fgd")
 
         if not os.path.isfile(definitions_path):
+            print("No definitions file found. (" + definitions_path + ")")
             return {'FINISHED'}
 
         with open(definitions_path) as definition_file:
-            print("Loading definitions.")
+            print("Loading definitions. (" + definitions_path + ")")
             definitions = json.load(definition_file)
             if "types" in definitions:
                 entity_meta = {}
@@ -852,6 +857,11 @@ class LoadDefinitions(bpy.types.Operator):
 def InitializeDefinitions(parameters):
     bpy.ops.shatter.load_definitions()
 
+def OnGamePathUpdate(self,context):
+    print("Reloading definitions.")
+    # Load the entity definitions.
+    bpy.ops.shatter.load_definitions()
+
 def GetDummyEntityList():
     entity_types = []
 
@@ -891,7 +901,7 @@ def RegisterScenePanels():
 
     # Register scene panel properties.
     Scene.shatter_export_path = StringProperty(name="Levels Path",description="Export location of the main level file", subtype="DIR_PATH")
-    Scene.shatter_game_path = StringProperty(name="Game Path",description="Location of the game's executable", subtype="DIR_PATH")
+    Scene.shatter_game_path = StringProperty(name="Game Path",description="Location of the game's executable", subtype="DIR_PATH", update=OnGamePathUpdate)
     Scene.shatter_game_executable = StringProperty(name="Game Executable",description="Name of the game's executable")
     Scene.shatter_export_prefabs = BoolProperty(name="Prefabs",description="Determines whether proxies marked as prefabs should be exported",default=False)
     Scene.shatter_export_meshes = BoolProperty(name="Meshes",description="Determines whether meshes should be exported",default=True)

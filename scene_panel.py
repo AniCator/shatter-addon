@@ -278,6 +278,9 @@ def GenerateAsset(operator,context,exported,obj):
                                          to_up=axis_up,
                                          ).to_4x4())
 
+        # Set global matrix to identity to prevent modifier application issues.
+        # global_matrix = Matrix()
+
         keywords = {
             'use_selection': True, 
             'use_active_collection': False, 
@@ -335,8 +338,10 @@ def ParseObject(operator,context,exported, obj, recurse = True, parent = None):
         return
 
     for collection in obj.users_collection:
-        if collection.name in context.view_layer.layer_collection.children and context.view_layer.layer_collection.children[collection.name].hide_viewport == True:
-            return
+        if collection.name in context.view_layer.layer_collection.children:
+            view_collection = context.view_layer.layer_collection.children[collection.name]
+            if view_collection.hide_viewport == True or collection.hide_render == True:
+                return
     
     GenerateAsset(operator,context,exported,obj)
 
@@ -896,7 +901,30 @@ def SetPrefab(self, value):
 
     self["shatter_prefab"] = value
 
+classes = (
+    KeyValueItem,
+    SLSS_UL_KeyValueList,
+    DefinitionType,
+
+    SLS_PT_ShatterScene,
+    SLS_PT_ShatterObject,
+    SLS_PT_ShatterObjectDefinitions,
+    SLS_PT_ShatterObjectProperties,
+
+    ExportScene,
+    RunWorld,
+    ExportAndRunWorld,
+    LoadDefinitions,
+
+    ShatterKeyAdd,
+    ShatterKeyRemove
+)
+
 def RegisterScenePanels():
+    # Register all of the classes
+    for cls in classes:
+        bpy.utils.register_class(cls)
+    
     Scene = bpy.types.Scene
 
     # Register scene panel properties.
@@ -946,12 +974,9 @@ def RegisterScenePanels():
 
     Object.shatter_shader_type_custom = StringProperty(name="Type",description="Custom Shatter shader type")
 
-    bpy.utils.register_class(KeyValueItem)
-    bpy.utils.register_class(SLSS_UL_KeyValueList)
     Object.shatter_key_values = CollectionProperty(type = KeyValueItem)
     Object.shatter_key_value_index = IntProperty(name="Key Value Index", default=0)
 
-    bpy.utils.register_class(DefinitionType)
     Object.shatter_properties = CollectionProperty(type = DefinitionType)
 
     Object.shatter_visible = BoolProperty(name="Visible",description="Should this object be visible in the engine?",default=True)
@@ -959,18 +984,6 @@ def RegisterScenePanels():
 
     Object.shatter_prefab = StringProperty(name="Prefab",description="Where to look for the prefab if relevant.", subtype="FILE_PATH", get=GetPrefab, set=SetPrefab)
     Object.shatter_uuid = StringProperty(name="UUID",description="Unique identifier for the Shatter engine.")
-   
-    bpy.utils.register_class(SLS_PT_ShatterScene)
-    bpy.utils.register_class(SLS_PT_ShatterObject)
-    bpy.utils.register_class(SLS_PT_ShatterObjectDefinitions)
-    bpy.utils.register_class(SLS_PT_ShatterObjectProperties)
-    bpy.utils.register_class(ExportScene)
-    bpy.utils.register_class(RunWorld)
-    bpy.utils.register_class(ExportAndRunWorld)
-    bpy.utils.register_class(LoadDefinitions)
-
-    bpy.utils.register_class(ShatterKeyAdd)
-    bpy.utils.register_class(ShatterKeyRemove)
 
     bpy.app.handlers.load_post.append(InitializeDefinitions)
 
@@ -978,22 +991,9 @@ def RegisterScenePanels():
     Timer(0.1, InitializeDefinitions, ["test"]).start()
 
 def UnregisterScenePanels():
-    bpy.utils.unregister_class(SLS_PT_ShatterScene)
-    bpy.utils.unregister_class(SLS_PT_ShatterObject)
-    bpy.utils.unregister_class(SLS_PT_ShatterObjectDefinitions)
-    bpy.utils.unregister_class(SLS_PT_ShatterObjectProperties)
-    bpy.utils.unregister_class(ExportScene)
-    bpy.utils.unregister_class(RunWorld)
-    bpy.utils.unregister_class(ExportAndRunWorld)
-    bpy.utils.unregister_class(LoadDefinitions)
-
-    bpy.utils.unregister_class(KeyValueItem)
-    bpy.utils.unregister_class(SLSS_UL_KeyValueList)
-
-    bpy.utils.unregister_class(DefinitionType)
-
-    bpy.utils.unregister_class(ShatterKeyAdd)
-    bpy.utils.unregister_class(ShatterKeyRemove)
+    # Unregister all of the classes
+    for cls in classes:
+        bpy.utils.unregister_class(cls)
 
     bpy.app.handlers.load_post.remove(InitializeDefinitions)
 

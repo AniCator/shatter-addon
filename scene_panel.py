@@ -834,18 +834,26 @@ def GetDummyEntityList():
 
     return tuple(entity_types)
 
+# Getters are required if a setter exists.
 def GetPrefab(self):
     return self["shatter_prefab"]
 
 # Used to set the prefab path to its relative directory
 def SetPrefab(self, value):
-    rel = bpy.path.abspath(bpy.context.scene.shatter_game_path)
-    print(rel)
-    value = bpy.path.relpath(bpy.path.abspath(value), rel)
+    game_path = bpy.path.abspath(bpy.context.scene.shatter_game_path)
+
+    # Get the path relative to the game path.
+    value = bpy.path.relpath(bpy.path.abspath(value), game_path)
+
+    # Remove the extra slashes at the start.
     value = value.lstrip('/')
+
+    # Replace the backslashes with forward slashes if needed.
     value = value.replace('\\','/')
+
+    # Strip the extension.
     value = value.rstrip(".sls")
-    print(value)
+
     self["shatter_prefab"] = value
 
 def RegisterScenePanels():

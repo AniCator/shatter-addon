@@ -744,10 +744,9 @@ def ApplyDefinition(obj, clear=True):
 
     definitions = bpy.types.Scene.shatter_definitions[obj.shatter_type]
 
-    # Check which definitions are missing
-    existing_names = []
-    for prop in obj.shatter_properties:
-        existing_names.append(prop.name)
+    # Check which definitions are missing.
+    # Copy the existing property names.
+    existing_names = [prop.name for prop in obj.shatter_properties]
 
     missing_definitions = []
     for definition in definitions:

@@ -745,21 +745,23 @@ def ApplyDefinition(obj, clear=True):
         if definition["key"] not in existing_names:
             missing_definitions.append(definition)
 
-    accounted_props = []
-    for definition in definitions:
+    # If we're not clearing, make sure to purge orphaned properties.
+    if clear == False:
+        accounted_props = []
+        for definition in definitions:
+            for prop in obj.shatter_properties:
+                if definition["key"] == prop.name:
+                    accounted_props.append(prop.name)
+
+        unaccounted_props = []
         for prop in obj.shatter_properties:
-            if definition["key"] == prop.name:
-                accounted_props.append(prop.name)
+            if prop.name not in accounted_props:
+                unaccounted_props.append(prop.name)
 
-    unaccounted_props = []
-    for prop in obj.shatter_properties:
-        if prop.name not in accounted_props:
-            unaccounted_props.append(prop.name)
-
-    for prop in unaccounted_props:
-        index = obj.shatter_properties.find(prop)
-        if index > -1:
-            obj.shatter_properties.remove(index)
+        for prop in unaccounted_props:
+            index = obj.shatter_properties.find(prop)
+            if index > -1:
+                obj.shatter_properties.remove(index)
 
     for definition in missing_definitions:
         item = obj.shatter_properties.add()

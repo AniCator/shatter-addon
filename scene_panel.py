@@ -747,6 +747,8 @@ def ApplyDefinition(obj, clear=True):
     # Check which definitions are missing.
     # Copy the existing property names.
     existing_names = [prop.name for prop in obj.shatter_properties]
+
+    # Get all of the definitions that aren't already defined in the shatter_properties collection.
     missing_definitions = [definition for definition in definitions if definition["key"] not in existing_names]
 
     # If we're not clearing, make sure to purge orphaned properties.

@@ -472,7 +472,7 @@ def ParseObject(operator,context,exported, obj, recurse = True, parent = None):
         if entity["type"] == "mesh" and obj.type == "MESH":
             # print("Mesh " + obj.data.name)
             entity["mesh"] = obj.data.name.lower()
-        elif not is_level:
+        elif not is_level and entity["type"] not in context.scene.shatter_definitions:
             print("Object " + obj.name)
             entity["mesh"] = obj.name.lower()
 

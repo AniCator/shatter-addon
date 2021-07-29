@@ -226,8 +226,8 @@ def GetPropertyValue(prop):
     elif prop.type == "entities":
         result = []
         for item in prop.value_c:
-            result.append(item.name)
-        return str(result)
+            result.append(item.value.name)
+        return result
 
 def DisplayProperty(layout, kv):
     row = layout.row()

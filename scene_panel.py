@@ -196,7 +196,7 @@ def DrawEntityTextForObject(obj):
     scene = bpy.context.scene
 
     draw_label = True
-    offset = [100,-30]
+    offset = [0,0]
     for prop in obj.shatter_properties:
         if prop.type == "entities":
             for entity in prop.value_c:
@@ -218,7 +218,8 @@ def DrawEntityTextForObject(obj):
                             else:
                                 DrawText(color, entity.value.location, entity.name + " execute " + entity.extra + "()", tuple(offset))
                             offset[1] -= 20
-                draw_label = True
+                    draw_label = True
+                    offset = [0,0]
 
 # This function goes through all objects that have link properties and draws the links.
 def DrawEntityLinks():
@@ -238,6 +239,41 @@ def DrawEntityTexts():
 
     #for obj in bpy.context.scene.objects:
     #    DrawEntityTextForObject(obj)
+
+def LinkToObject(target, link, clear=False):
+    for prop in target.shatter_properties:
+            if prop.name == "links" and prop.type == "entities":
+                if clear:
+                    prop.value_c.clear()
+
+                bpy.ops.object.shatter_object_add({"item" : prop})
+                item = prop.value_c[len(prop.value_c) - 1]
+                item.value = link
+
+def CheckAutomaticLinks(previous_object, active_object):
+    if active_object == None or previous_object == None:
+        return
+
+    if active_object.name != previous_object.name:
+        LinkToObject(previous_object, active_object)
+        LinkToObject(active_object, previous_object, True)
+
+class ShatterObjectLink(bpy.types.Operator):
+    bl_idname = "object.shatter_object_link"
+    bl_label = "Duplicates an object and links it to the previously selected object"
+    bl_options = {"GRAB_CURSOR"}
+
+    def execute(self,context):
+        print("Link move")
+        previous_object = context.active_object
+        bpy.ops.object.duplicate_move_linked()
+        active_object = context.active_object
+
+        if active_object != previous_object:
+            active_object.location[0] += -2.0
+            CheckAutomaticLinks(previous_object, active_object)
+
+        return {'FINISHED'}
 
 class ObjectValueItem(PropertyGroup):
     value : PointerProperty(type=bpy.types.Object)
@@ -1130,6 +1166,7 @@ classes = (
 
     ObjectValueItem,
     SLSS_UL_ObjectList,
+    ShatterObjectLink,
     ShatterObjectDuplicate,
     ShatterObjectAdd,
     ShatterObjectRemove,
@@ -1149,10 +1186,25 @@ classes = (
     ShatterKeyRemove
 )
 
+addon_keymap = []
+def RegisterKeyConfig():
+    wm = bpy.context.window_manager
+    kc = wm.keyconfigs.addon
+    if kc:
+        km = wm.keyconfigs.addon.keymaps.new(name='3D View', space_type='VIEW_3D')
+        kmi = km.keymap_items.new(ShatterObjectLink.bl_idname, type='D', value='RELEASE', ctrl=True, alt=True)
+
+def UnregisterKeyConfig():
+    for km, kmi in addon_keymap:
+        km.keymap_items.remove(kmi)
+    addon_keymap.clear()
+
 def RegisterScenePanels():
     # Register all of the classes
     for cls in classes:
         bpy.utils.register_class(cls)
+
+    RegisterKeyConfig()
     
     Scene = bpy.types.Scene
 
@@ -1167,6 +1219,7 @@ def RegisterScenePanels():
     Scene.shatter_is_bare = BoolProperty(name="Bare",description="Bare files don't include things like the sky mesh by default.",default=True)
 
     Scene.shatter_definitions = []
+    Scene.shatter_previous_object = None
 
     # Register object properties.
     Object = bpy.types.Object
@@ -1227,6 +1280,8 @@ def UnregisterScenePanels():
     for cls in classes:
         bpy.utils.unregister_class(cls)
 
+    UnregisterKeyConfig()
+
     bpy.app.handlers.load_post.remove(InitializeDefinitions)
 
     Scene = bpy.types.Scene
@@ -1245,6 +1300,7 @@ def UnregisterScenePanels():
     del Scene.shatter_is_bare
 
     del Scene.shatter_definitions
+    del Scene.shatter_previous_object
 
     Object = bpy.types.Object
 

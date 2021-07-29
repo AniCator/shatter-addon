@@ -820,7 +820,6 @@ def ApplyDefinition(obj, clear=True):
         item = obj.shatter_properties.add()
         item.name = definition["key"]
         item.type = definition["type"]
-        item.prop = StringProperty(name=item.name)
 
 def OnTypeUpdate(self,context):
     ApplyDefinition(self)
@@ -830,7 +829,7 @@ class LoadDefinitions(bpy.types.Operator):
     bl_label = "Reload Definitions"
     bl_description = "Loads entity definitions if available."
 
-    filtered_keys = ["name", "transform", "inputs", "outputs"]
+    filtered_keys = ["name", "help", "transform", "inputs", "outputs"]
 
     def execute(self,context):
         definitions_path = bpy.path.abspath(context.scene.shatter_game_path + "Definitions.fgd")
@@ -854,8 +853,13 @@ class LoadDefinitions(bpy.types.Operator):
 
                 for item in definitions["types"]:
                     if "name" in item:
-                        entity_types.append((item["name"],item["name"].capitalize(),""))
+                        # Check if a description/help field was included.
+                        description = item["help"] if "help" in item else ""
 
+                        # Add the entity's name to the type array.
+                        entity_types.append((item["name"],item["name"].capitalize(), description))
+
+                        # Get all the additional properties.
                         for meta in item.items():
                             data = {}
 

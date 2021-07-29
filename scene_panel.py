@@ -929,8 +929,11 @@ class LoadDefinitions(bpy.types.Operator):
                             if len(type_info) > 1:
                                 colors = type_info[1].lstrip('(').rstrip(')').split(',')
                                 colors = [float(c) for c in colors]
-                                if len(colors) == 4:
-                                    data["debug_color"] = tuple(colors)
+
+                                if len(colors) == 3:
+                                    colors.append(1.0)
+
+                                data["debug_color"] = tuple(colors)
 
                             if item["name"] not in entity_meta:
                                 entity_meta[item["name"]] = []
@@ -939,8 +942,8 @@ class LoadDefinitions(bpy.types.Operator):
 
                         # Add inputs and outputs
                         if item["name"] in entity_meta:
-                            # entity_meta[item["name"]].append({"key" : "inputs", "type" : "entities", "debug_color" : (1.0, 0.5, 0.0, 0.05)})
-                            entity_meta[item["name"]].append({"key" : "outputs", "type" : "entities", "debug_color" : (0.0, 0.5, 1.0, 0.05)})
+                            # entity_meta[item["name"]].append({"key" : "inputs", "type" : "entities", "debug_color" : (1.0, 0.5, 0.0, 1.0)})
+                            entity_meta[item["name"]].append({"key" : "outputs", "type" : "entities", "debug_color" : (0.0, 0.5, 1.0, 1.0)})
 
                 entity_types = tuple(entity_types)
 

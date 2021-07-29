@@ -146,6 +146,67 @@ class SLS_PT_ShatterObjectProperties(bpy.types.Panel):
                 row = layout.row()
                 row.prop(kv, "value", text=kv.name)
 
+class ObjectValueItem(PropertyGroup):
+    value : PointerProperty(type=bpy.types.Object)
+
+class ShatterObjectAdd(bpy.types.Operator):
+    bl_idname = "object.shatter_object_add"
+    bl_label = "Add Object to List"
+
+    def execute(self,context):
+        obj = context.item
+
+        size = len(obj.value_c)
+        if size > 0 and obj.value_c[size - 1].value == None:
+            return {'FINISHED'}
+
+
+        obj.value_c.add()
+        obj.value_c_index = len(obj.value_c) - 1
+
+        obj.value_c[obj.value_c_index].name = ""
+        obj.value_c[obj.value_c_index].value = None
+
+        return {'FINISHED'}
+
+class ShatterObjectRemove(bpy.types.Operator):
+    bl_idname = "object.shatter_object_remove"
+    bl_label = "Remove Object from List"
+
+    def execute(self,context):
+        obj = context.item
+
+        index = obj.value_c_index
+
+        obj.value_c.remove(index)
+        obj.value_c_index = min(max(0, index - 1), len(obj.value_c) - 1)
+
+        return {'FINISHED'}
+
+class SLSS_UL_ObjectList(bpy.types.UIList):
+    bl_label = "Shatter Object List"
+    bl_idname = "OBJECT_UL_ShatterObjectList"
+
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname):
+        if self.layout_type in {'DEFAULT', 'COMPACT'}:
+            layout.separator()
+            layout.prop_search(item, "value", bpy.context.scene, "objects", text="")
+
+        elif self.layout_type in {'GRID'}:
+            pass
+
+class DefinitionType(bpy.types.PropertyGroup):
+    type: StringProperty( default="string")
+
+    value_s: StringProperty()
+    value_f: FloatProperty()
+    value_i: IntProperty()
+    value_b: BoolProperty()
+    value_v: FloatVectorProperty()
+    value_o: PointerProperty(type=bpy.types.Object)
+    value_c: CollectionProperty(type=ObjectValueItem)
+    value_c_index: IntProperty(default=0)
+
 def GetPropertyValue(prop):
     if prop.type == "string":
         return prop.value_s
@@ -160,6 +221,13 @@ def GetPropertyValue(prop):
             return "1"
         else:
             return "0"
+    elif prop.type == "entity":
+        return str(prop.value_o.name)
+    elif prop.type == "entities":
+        result = []
+        for item in prop.value_c:
+            result.append(item.name)
+        return str(result)
 
 def DisplayProperty(layout, kv):
     row = layout.row()
@@ -176,8 +244,15 @@ def DisplayProperty(layout, kv):
     elif kv.type == "int":
         split.prop(kv, "value_i", text="")
     elif kv.type == "bool":
-        split.alignment = "CENTER"
         split.prop(kv, "value_b", text="")
+    elif kv.type == "entity":
+        split.prop_search(kv, "value_o", bpy.context.scene, "objects", text="")
+    elif kv.type == "entities":
+        split.template_list("OBJECT_UL_ShatterObjectList", "Shatter Object List", kv, "value_c", kv, "value_c_index")
+        col = row.column(align=True)
+        col.context_pointer_set("item", kv)
+        col.operator("object.shatter_object_add", icon='ADD', text="")
+        col.operator("object.shatter_object_remove", icon='REMOVE', text="")
 
 class SLS_PT_ShatterObject(bpy.types.Panel):
     bl_label = "Shatter Object"
@@ -672,16 +747,6 @@ class OutputType(bpy.types.PropertyGroup):
     target: PointerProperty(type=bpy.types.Object)
     input: StringProperty()
 
-
-class DefinitionType(bpy.types.PropertyGroup):
-    type: StringProperty( default="string")
-
-    value_s: StringProperty()
-    value_f: FloatProperty()
-    value_i: IntProperty()
-    value_b: BoolProperty()
-    value_v: FloatVectorProperty()
-
 class SLSS_UL_DefinitionList(bpy.types.UIList):
     bl_label = "Shatter Definition List"
     bl_idname = "OBJECT_UL_ShatterDefinitionList"
@@ -706,24 +771,6 @@ class SLS_PT_ShatterObjectDefinitions(bpy.types.Panel):
         layout= self.layout
         obj = context.object
 
-        # row = layout.row()
-        # row.template_list("OBJECT_UL_ShatterDefinitionList", "Shatter Object Keys", obj, "shatter_properties", obj, "shatter_properties_index")
-
-        # if len(obj.shatter_properties) > 0:
-        #     kv = obj.shatter_properties[obj.shatter_properties_index]
-        #     if kv:
-        #         row = layout.row()
-        #         if kv.type == "string":
-        #             row.prop(kv, "value_s", text="")
-        #         elif kv.type == "float":
-        #             row.prop(kv, "value_f", text="")
-        #         elif kv.type == "vector":
-        #             row.prop(kv, "value_v", text="")
-        #         elif kv.type == "int":
-        #             row.prop(kv, "value_i", text="")
-        #         elif kv.type == "bool":
-        #             row.alignment = "CENTER"
-        #             row.prop(kv, "value_b", text="")
         for prop in obj.shatter_properties:
             DisplayProperty(layout, prop)
 
@@ -901,6 +948,11 @@ def SetPrefab(self, value):
 classes = (
     KeyValueItem,
     SLSS_UL_KeyValueList,
+
+    ObjectValueItem,
+    SLSS_UL_ObjectList,
+    ShatterObjectAdd,
+    ShatterObjectRemove,
     DefinitionType,
 
     SLS_PT_ShatterScene,

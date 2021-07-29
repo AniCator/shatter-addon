@@ -151,8 +151,42 @@ class SLS_PT_ShatterObjectProperties(bpy.types.Panel):
                 row = layout.row()
                 row.prop(kv, "value", text=kv.name)
 
+def DrawLine(color, start, end):
+    shader = gpu.shader.from_builtin('3D_UNIFORM_COLOR')
+    batch = batch_for_shader(shader, 'LINES', {"pos": [start,end]})
+    shader.bind()
+    shader.uniform_float("color", color)
+    batch.draw(shader)
+
+def DrawEntityLinkForObject(obj):
+    color = (0.0,1.0,0.0, 1.0)
+    scene = bpy.context.scene
+    for prop in obj.shatter_properties:
+        if prop.type == "entities":
+            for entity in prop.value_c:
+                if entity.value != None:
+                    for param in scene.shatter_definitions[obj.shatter_type]:
+                        if param["type"] == prop.type and param["key"] == prop.name:
+                            if "debug_color" in param:
+                                DrawLine(param["debug_color"], obj.location, entity.value.location)
+                            else:
+                                DrawLine(color, obj.location, entity.value.location)
+
+# This function goes through all objects that have link properties and draws the links.
+def DrawEntityLinks():
+    scene = bpy.context.scene
+
+    if len(bpy.context.selected_objects) > 0:
+        for obj in bpy.context.selected_objects:
+            DrawEntityLinkForObject(obj)
+        return
+
+    for obj in scene.objects:
+        DrawEntityLinkForObject(obj)
+
 class ObjectValueItem(PropertyGroup):
     value : PointerProperty(type=bpy.types.Object)
+    extra : StringProperty(name="Input")
 
 class ShatterObjectAdd(bpy.types.Operator):
     bl_idname = "object.shatter_object_add"
@@ -194,8 +228,14 @@ class SLSS_UL_ObjectList(bpy.types.UIList):
 
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname):
         if self.layout_type in {'DEFAULT', 'COMPACT'}:
-            layout.separator()
+            display_name = active_data.name == "outputs"
+            if not display_name:
+                layout.separator()
             layout.prop_search(item, "value", bpy.context.scene, "objects", text="")
+
+            if display_name:
+                layout.prop(item, "name", text="")
+                layout.prop(item, "extra", text="")
 
         elif self.layout_type in {'GRID'}:
             pass
@@ -228,11 +268,16 @@ def GetPropertyValue(prop):
             return "0"
     elif prop.type == "entity":
         return str(prop.value_o.name)
-    elif prop.type == "entities":
+    elif prop.type == "entities" and len(prop.value_c) > 0:
         result = []
-        for item in prop.value_c:
-            result.append(item.value.name)
-        return result
+        if prop.name == "outputs":
+            for item in prop.value_c:
+                result.append({"name" : item.name, "target" : item.value.name,"input" : item.extra})
+            return result
+        else:
+            for item in prop.value_c:
+                result.append(item.value.name)
+            return result
 
 def DisplayProperty(layout, kv):
     row = layout.row()
@@ -534,7 +579,9 @@ def ParseObject(operator,context,exported, obj, recurse = True, parent = None):
             entity[pair.name] = pair.value
 
         for pair in obj.shatter_properties:
-            entity[pair.name] = GetPropertyValue(pair)
+            value = GetPropertyValue(pair)
+            if value != None:
+                entity[pair.name] = value
 
 
         exported["entities"].append(entity)
@@ -748,25 +795,6 @@ class SLS_PT_ShatterScene(bpy.types.Panel):
             row = layout.row()
             row.label(text="Only the main scene will be exported. (JSON-only)")
 
-def DrawLine(color, start, end):
-    shader = gpu.shader.from_builtin('3D_UNIFORM_COLOR')
-    batch = batch_for_shader(shader, 'LINES', {"pos": [start,end]})
-    shader.bind()
-    shader.uniform_float("color", color)
-    batch.draw(shader)
-
-# This function goes through all objects that have link properties and draws the links.
-def DrawEntityLinks():
-    color = (0.0,1.0,0.0, 1.0)
-    scene = bpy.context.scene
-    pairs = []
-    for obj in scene.objects:
-        for prop in obj.shatter_properties:
-            if prop.type == "entities":
-                for entity in prop.value_c:
-                    if entity.value != None:
-                        DrawLine(color, obj.location, entity.value.location)
-
 class OutputType(bpy.types.PropertyGroup):
     target: PointerProperty(type=bpy.types.Object)
     input: StringProperty()
@@ -894,12 +922,25 @@ class LoadDefinitions(bpy.types.Operator):
                                 continue
 
                             data["key"] = key
-                            data["type"] = type
+
+                            type_info = type.split(',', 1)
+                            data["type"] = type_info[0]
+
+                            if len(type_info) > 1:
+                                colors = type_info[1].lstrip('(').rstrip(')').split(',')
+                                colors = [float(c) for c in colors]
+                                if len(colors) == 4:
+                                    data["debug_color"] = tuple(colors)
 
                             if item["name"] not in entity_meta:
                                 entity_meta[item["name"]] = []
 
                             entity_meta[item["name"]].append(data)
+
+                        # Add inputs and outputs
+                        if item["name"] in entity_meta:
+                            # entity_meta[item["name"]].append({"key" : "inputs", "type" : "entities", "debug_color" : (1.0, 0.5, 0.0, 0.05)})
+                            entity_meta[item["name"]].append({"key" : "outputs", "type" : "entities", "debug_color" : (0.0, 0.5, 1.0, 0.05)})
 
                 entity_types = tuple(entity_types)
 
@@ -997,8 +1038,6 @@ classes = (
     ShatterKeyRemove
 )
 
-DrawHandler = None
-
 def RegisterScenePanels():
     # Register all of the classes
     for cls in classes:
@@ -1064,7 +1103,7 @@ def RegisterScenePanels():
     Object.shatter_prefab = StringProperty(name="Prefab",description="Where to look for the prefab if relevant.", subtype="FILE_PATH", get=GetPrefab, set=SetPrefab)
     Object.shatter_uuid = StringProperty(name="UUID",description="Unique identifier for the Shatter engine.")
 
-    DrawHandler = bpy.types.SpaceView3D.draw_handler_add(DrawEntityLinks, (), 'WINDOW', 'POST_VIEW')
+    Scene.DrawHandler = bpy.types.SpaceView3D.draw_handler_add(DrawEntityLinks, (), 'WINDOW', 'POST_VIEW')
 
     bpy.app.handlers.load_post.append(InitializeDefinitions)
 
@@ -1076,12 +1115,11 @@ def UnregisterScenePanels():
     for cls in classes:
         bpy.utils.unregister_class(cls)
 
-    if DrawHandler != None:
-        bpy.types.SpaceView3D.draw_handler_remove(DrawHandler, 'WINDOW')
-
     bpy.app.handlers.load_post.remove(InitializeDefinitions)
 
     Scene = bpy.types.Scene
+
+    bpy.types.SpaceView3D.draw_handler_remove(Scene.DrawHandler, 'WINDOW')
 
     # Unregister scene panel properties.
     del Scene.shatter_export_path

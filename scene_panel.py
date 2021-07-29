@@ -5,6 +5,11 @@ from bpy import ops
 from bpy.props import *
 from bpy.types import PropertyGroup
 
+import bgl
+import blf
+import gpu
+from gpu_extras.batch import batch_for_shader
+
 from mathutils import Matrix
 from math import degrees
 
@@ -743,6 +748,25 @@ class SLS_PT_ShatterScene(bpy.types.Panel):
             row = layout.row()
             row.label(text="Only the main scene will be exported. (JSON-only)")
 
+def DrawLine(color, start, end):
+    shader = gpu.shader.from_builtin('3D_UNIFORM_COLOR')
+    batch = batch_for_shader(shader, 'LINES', {"pos": [start,end]})
+    shader.bind()
+    shader.uniform_float("color", color)
+    batch.draw(shader)
+
+# This function goes through all objects that have link properties and draws the links.
+def DrawEntityLinks():
+    color = (0.0,1.0,0.0, 1.0)
+    scene = bpy.context.scene
+    pairs = []
+    for obj in scene.objects:
+        for prop in obj.shatter_properties:
+            if prop.type == "entities":
+                for entity in prop.value_c:
+                    if entity.value != None:
+                        DrawLine(color, obj.location, entity.value.location)
+
 class OutputType(bpy.types.PropertyGroup):
     target: PointerProperty(type=bpy.types.Object)
     input: StringProperty()
@@ -973,6 +997,8 @@ classes = (
     ShatterKeyRemove
 )
 
+DrawHandler = None
+
 def RegisterScenePanels():
     # Register all of the classes
     for cls in classes:
@@ -1038,6 +1064,8 @@ def RegisterScenePanels():
     Object.shatter_prefab = StringProperty(name="Prefab",description="Where to look for the prefab if relevant.", subtype="FILE_PATH", get=GetPrefab, set=SetPrefab)
     Object.shatter_uuid = StringProperty(name="UUID",description="Unique identifier for the Shatter engine.")
 
+    DrawHandler = bpy.types.SpaceView3D.draw_handler_add(DrawEntityLinks, (), 'WINDOW', 'POST_VIEW')
+
     bpy.app.handlers.load_post.append(InitializeDefinitions)
 
     # Use a timer to prod the operator, it's not possible to execute it straight away.
@@ -1047,6 +1075,9 @@ def UnregisterScenePanels():
     # Unregister all of the classes
     for cls in classes:
         bpy.utils.unregister_class(cls)
+
+    if DrawHandler != None:
+        bpy.types.SpaceView3D.draw_handler_remove(DrawHandler, 'WINDOW')
 
     bpy.app.handlers.load_post.remove(InitializeDefinitions)
 

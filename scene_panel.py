@@ -188,6 +188,28 @@ class ObjectValueItem(PropertyGroup):
     value : PointerProperty(type=bpy.types.Object)
     extra : StringProperty(name="Input")
 
+class ShatterObjectDuplicate(bpy.types.Operator):
+    bl_idname = "object.shatter_object_duplicate"
+    bl_label = "Duplicate last Object in List"
+
+    def execute(self,context):
+        obj = context.item
+
+        size = len(obj.value_c)
+        if size > 0 and obj.value_c[size - 1].value == None:
+            return {'FINISHED'}
+
+        latest = obj.value_c[size - 1]
+
+        obj.value_c.add()
+        obj.value_c_index = len(obj.value_c) - 1
+
+        obj.value_c[obj.value_c_index].name = latest.name
+        obj.value_c[obj.value_c_index].value = latest.value
+        obj.value_c[obj.value_c_index].extra = latest.extra
+
+        return {'FINISHED'}
+
 class ShatterObjectAdd(bpy.types.Operator):
     bl_idname = "object.shatter_object_add"
     bl_label = "Add Object to List"
@@ -205,6 +227,7 @@ class ShatterObjectAdd(bpy.types.Operator):
 
         obj.value_c[obj.value_c_index].name = ""
         obj.value_c[obj.value_c_index].value = None
+        obj.value_c[obj.value_c_index].extra = ""
 
         return {'FINISHED'}
 
@@ -278,6 +301,8 @@ def GetPropertyValue(prop):
             for item in prop.value_c:
                 result.append(item.value.name)
             return result
+    else:
+        return None
 
 def DisplayProperty(layout, kv):
     row = layout.row()
@@ -303,6 +328,7 @@ def DisplayProperty(layout, kv):
         col.context_pointer_set("item", kv)
         col.operator("object.shatter_object_add", icon='ADD', text="")
         col.operator("object.shatter_object_remove", icon='REMOVE', text="")
+        col.operator("object.shatter_object_duplicate", icon='DUPLICATE', text="")
 
 class SLS_PT_ShatterObject(bpy.types.Panel):
     bl_label = "Shatter Object"
@@ -482,6 +508,7 @@ def ParseObject(operator,context,exported, obj, recurse = True, parent = None):
             else:
                 for child in obj.instance_collection.objects:
                     ParseObject(operator,context,exported,child, False, obj)
+                return
             print("End of Collection: " + obj.name)
         else:
             print("Unknown empty type. (" + obj.instance_type + ")")
@@ -518,15 +545,26 @@ def ParseObject(operator,context,exported, obj, recurse = True, parent = None):
             print("Prefab sub-level " + obj.shatter_prefab)
             entity["path"] = obj.shatter_prefab + ".sls"
 
+        undefined_type = entity["type"] not in context.scene.shatter_definitions
+
+        should_export_transform = True
+        if undefined_type == False:
+            definition = context.scene.shatter_definitions[entity["type"]]
+            for param in definition:
+                if param["key"] == "no_transform":
+                    should_export_transform = False
+
         # Fetch the mesh name if we're a mesh object.
-        if entity["type"] == "mesh" and obj.type == "MESH":
+        mesh_type = False
+        if (not undefined_type or entity["type"] == "mesh") and obj.type == "MESH":
             # print("Mesh " + obj.data.name)
             entity["mesh"] = obj.data.name.lower()
-        elif not is_level and entity["type"] not in context.scene.shatter_definitions:
-            print("Object " + obj.name)
-            entity["mesh"] = obj.name.lower()
+            mesh_type = True
+        elif not is_level and undefined_type:
+            # Type likely isn't supported. Skip.
+            return
 
-        if not is_level:
+        if not is_level and mesh_type:
             entity["shader"] = "DefaultGrid"
 
             texture = GetTexture(obj)
@@ -544,20 +582,21 @@ def ParseObject(operator,context,exported, obj, recurse = True, parent = None):
             obj.color[1] = parent.color[1]
             obj.color[2] = parent.color[2]
 
-        position = copy.deepcopy(obj.location)
-        
-        entity["position"] = VectorToString(position)
-        # entity["position"] = "0 0 0"
+        if should_export_transform:
+            position = copy.deepcopy(obj.location)
+            
+            entity["position"] = VectorToString(position)
+            # entity["position"] = "0 0 0"
 
-        rotation = copy.deepcopy(obj.rotation_euler)
+            rotation = copy.deepcopy(obj.rotation_euler)
 
-        rotation.x = degrees(obj.rotation_euler.y)
-        rotation.y = degrees(obj.rotation_euler.x)
-        rotation.z = degrees(obj.rotation_euler.z)
+            rotation.x = degrees(obj.rotation_euler.y)
+            rotation.y = degrees(obj.rotation_euler.x)
+            rotation.z = degrees(obj.rotation_euler.z)
 
-        entity["rotation"] = VectorToString(rotation)
-        # entity["rotation"] = "0 0 0"
-        entity["scale"] = VectorToString(obj.scale)
+            entity["rotation"] = VectorToString(rotation)
+            # entity["rotation"] = "0 0 0"
+            entity["scale"] = VectorToString(obj.scale)
 
         if not is_level and obj.shatter_type != "custom" and obj.type != "EMPTY":
             entity["color"] = VectorToString(obj.color)
@@ -940,10 +979,19 @@ class LoadDefinitions(bpy.types.Operator):
 
                             entity_meta[item["name"]].append(data)
 
-                        # Add inputs and outputs
-                        if item["name"] in entity_meta:
-                            # entity_meta[item["name"]].append({"key" : "inputs", "type" : "entities", "debug_color" : (1.0, 0.5, 0.0, 1.0)})
-                            entity_meta[item["name"]].append({"key" : "outputs", "type" : "entities", "debug_color" : (0.0, 0.5, 1.0, 1.0)})
+                        # Add outputs field
+                        if "outputs" in item:
+                            if item["name"] not in entity_meta:
+                                    entity_meta[item["name"]] = []
+                        
+                            entity_meta[item["name"]].append({"key" : "outputs", "type" : "entities", "debug_color" : (0.6, 0.1, 0.0, 1.0)})
+
+                        if "transform" in item and item["transform"] == False:
+                            if item["name"] not in entity_meta:
+                                    entity_meta[item["name"]] = []
+                        
+                            entity_meta[item["name"]].append({"key" : "no_transform", "type" : "no_transform"})
+
 
                 entity_types = tuple(entity_types)
 
@@ -1023,6 +1071,7 @@ classes = (
 
     ObjectValueItem,
     SLSS_UL_ObjectList,
+    ShatterObjectDuplicate,
     ShatterObjectAdd,
     ShatterObjectRemove,
     DefinitionType,

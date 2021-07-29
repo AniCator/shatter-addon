@@ -5,6 +5,8 @@ from bpy import ops
 from bpy.props import *
 from bpy.types import PropertyGroup
 
+import bpy_extras
+
 import bgl
 import blf
 import gpu
@@ -151,6 +153,23 @@ class SLS_PT_ShatterObjectProperties(bpy.types.Panel):
                 row = layout.row()
                 row.prop(kv, "value", text=kv.name)
 
+def DrawText2D(color,position, text):
+    font_id = 0
+    blf.position(font_id, position[0], position[1], 0)
+    blf.color(font_id, color[0], color[1], color[2], color[3])
+    blf.size(font_id, 20, 72)
+    blf.draw(font_id, text)
+
+def DrawText(color, position, text, offset=(0,0)):
+    region = bpy.context.region
+    region_3d = bpy.context.space_data.region_3d
+    position2D = bpy_extras.view3d_utils.location_3d_to_region_2d(region, region_3d, position)
+
+    position2D[0] += offset[0]
+    position2D[1] += offset[1]
+
+    DrawText2D(color,position2D,text)
+
 def DrawLine(color, start, end):
     shader = gpu.shader.from_builtin('3D_UNIFORM_COLOR')
     batch = batch_for_shader(shader, 'LINES', {"pos": [start,end]})
@@ -172,17 +191,53 @@ def DrawEntityLinkForObject(obj):
                             else:
                                 DrawLine(color, obj.location, entity.value.location)
 
-# This function goes through all objects that have link properties and draws the links.
-def DrawEntityLinks():
+def DrawEntityTextForObject(obj):
+    color = (0.7,0.7,0.7, 1.0)
     scene = bpy.context.scene
 
+    draw_label = True
+    offset = [100,-30]
+    for prop in obj.shatter_properties:
+        if prop.type == "entities":
+            for entity in prop.value_c:
+                if draw_label:
+                    DrawText(color, entity.value.location, prop.name, tuple(offset))
+                    draw_label = False
+                    offset[0] += 10
+                    offset[1] -= 20
+                
+                if entity.value != None:
+                    for param in scene.shatter_definitions[obj.shatter_type]:
+                        if param["type"] == prop.type and param["key"] == prop.name:
+                            if "debug_color" in param:
+                                text = entity.name + " execute " + entity.extra + "()"
+                                if len(entity.extra) == 0:
+                                    text = entity.value.name
+
+                                DrawText(param["debug_color"], entity.value.location, text, tuple(offset))
+                            else:
+                                DrawText(color, entity.value.location, entity.name + " execute " + entity.extra + "()", tuple(offset))
+                            offset[1] -= 20
+                draw_label = True
+
+# This function goes through all objects that have link properties and draws the links.
+def DrawEntityLinks():
     if len(bpy.context.selected_objects) > 0:
         for obj in bpy.context.selected_objects:
             DrawEntityLinkForObject(obj)
         return
 
-    for obj in scene.objects:
+    for obj in bpy.context.scene.objects:
         DrawEntityLinkForObject(obj)
+
+def DrawEntityTexts():
+    if len(bpy.context.selected_objects) > 0:
+        for obj in bpy.context.selected_objects:
+            DrawEntityTextForObject(obj)
+        return
+
+    #for obj in bpy.context.scene.objects:
+    #    DrawEntityTextForObject(obj)
 
 class ObjectValueItem(PropertyGroup):
     value : PointerProperty(type=bpy.types.Object)
@@ -251,14 +306,16 @@ class SLSS_UL_ObjectList(bpy.types.UIList):
 
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname):
         if self.layout_type in {'DEFAULT', 'COMPACT'}:
+            row = layout.row()
             display_name = active_data.name == "outputs"
             if not display_name:
-                layout.separator()
-            layout.prop_search(item, "value", bpy.context.scene, "objects", text="")
+                row.separator()
+            row.prop_search(item, "value", bpy.context.scene, "objects", text="")
+            row = layout.row()
 
             if display_name:
-                layout.prop(item, "name", text="")
-                layout.prop(item, "extra", text="")
+                row.prop(item, "name", text="")
+                row.prop(item, "extra", text="")
 
         elif self.layout_type in {'GRID'}:
             pass
@@ -329,6 +386,8 @@ def DisplayProperty(layout, kv):
         col.operator("object.shatter_object_add", icon='ADD', text="")
         col.operator("object.shatter_object_remove", icon='REMOVE', text="")
         col.operator("object.shatter_object_duplicate", icon='DUPLICATE', text="")
+    else:
+        split.label(text="(read-only)")
 
 class SLS_PT_ShatterObject(bpy.types.Panel):
     bl_label = "Shatter Object"
@@ -1156,6 +1215,7 @@ def RegisterScenePanels():
     Object.shatter_uuid = StringProperty(name="UUID",description="Unique identifier for the Shatter engine.")
 
     Scene.DrawHandler = bpy.types.SpaceView3D.draw_handler_add(DrawEntityLinks, (), 'WINDOW', 'POST_VIEW')
+    Scene.TextHandler = bpy.types.SpaceView3D.draw_handler_add(DrawEntityTexts, (), 'WINDOW', 'POST_PIXEL')
 
     bpy.app.handlers.load_post.append(InitializeDefinitions)
 
@@ -1172,6 +1232,7 @@ def UnregisterScenePanels():
     Scene = bpy.types.Scene
 
     bpy.types.SpaceView3D.draw_handler_remove(Scene.DrawHandler, 'WINDOW')
+    bpy.types.SpaceView3D.draw_handler_remove(Scene.TextHandler, 'WINDOW')
 
     # Unregister scene panel properties.
     del Scene.shatter_export_path

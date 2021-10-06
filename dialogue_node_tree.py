@@ -2,110 +2,97 @@
 #   and populate it with nodes of varying types of I/O
 #   sockets that work together, discombobulated
 
-# first we import the blender API
 import bpy
 
 
-# then we create the UI space, the node tree as it is called
-#   but in actualy fact this is similar to a UI panel/menu
-#   and mostly handled in the background in terms of creation
-# so let's define out custom node tree, inheriting from its base type
 class DialogueNodeTree(bpy.types.NodeTree):
-    # the docstring here is used to generate documentation but
-    #   also used to display a description to the user
-    '''A custom node tree type'''
-    # then we can give it a custom id to access it, if not given
-    #   it will use the classname by default
+    '''Dialogue editor that allows for visual scripting of dialogue sequences'''
     bl_idname='DialogueNodeTree'
-    # the label is the name that will be displayed to the user
     bl_label='Dialogue Editor'
-    # the icon that will be displayed in the UI
-    # NOTE: check the blender dev plugins to see icons in text editor
     bl_icon='OUTLINER_OB_FONT'
 
+    def update(self):
+        
+        # Don't allow links of the same type to connect to each other.
+        for link in self.links:
+            same_type = isinstance(link.from_node, type(link.to_node))
+            if same_type:
+                self.links.remove(link)
+
+        return
+
+class DialogueSocket(bpy.types.NodeSocket):
+    bl_idname = "DialogueSocket"
+    bl_label = "Dialogue Socket"
+    prop_name = bpy.props.StringProperty(default='')
+    socket_col = bpy.props.FloatVectorProperty(size=4, default=(1, 1, 1, 1))
+
+    type = 'CUSTOM'
+    link_limit = 500
+
+    def draw(self, context, layout, node, text):
+        return
+
+    def draw_color(self, context, node):
+        if self.is_linked:
+            return (0,0.75,0,1)
+        else:
+            return (0.75,0,0,1)
+
     
-# that is all we needed to make a nodetree
-# first for convenience we make a class from which all our nodes
-#   will inherit from, saving us some typing
 class CustomNode(bpy.types.Node):
-    # this line makes the node visible only to the 'CustomNodeTree'
-    #   node tree, essentially checking context
     @classmethod
-    def poll(cls, ntree):
+    def poll(self, ntree):
         return ntree.bl_idname == 'DialogueNodeTree'
 
 
-# now we start making a simple input node that uses builtin
-#   blender properties, this is the simplest node
-# we define the node class that inherits from its mixin class
 class DialogueBodyNode(CustomNode):
-    # we can add a docstring that will be interpreted as description
     '''Dialogue body node'''
-    # optionally we define an id that we can reference the node by
     bl_idname = 'DialogueBodyNode'
-    # we add a label that the node will show the user as its name
-    bl_label = 'Dialogue Body'
-    # we can also add an icon to it
-    bl_icon = 'PLUS'
+    bl_label = 'Cue'
+    # bl_icon = 'ADD'
     
-    # we can add properties here that the node uses locally
-    # NOTE: does not get drawn automatically
-    Name = bpy.props.StringProperty()
-    Target = bpy.props.StringProperty()
-    Body = bpy.props.StringProperty()
+    Name : bpy.props.StringProperty()
+    Target : bpy.props.PointerProperty(type=bpy.types.Object)
+    Body : bpy.props.StringProperty()
     
-    # init function that is automagickally is called when the
-    #   node is instantiated into the treem setup sockets here
-    #   for both inputs and outputs
     def init(self, context):
-        # makes a new output socket of type 'NodeSocketInt' with the
-        #   label 'output' on it
-        # NOTE: no elements will be drawn for output sockets
-        self.outputs.new('NodeSocketString', "Target")
-        self.inputs.new('NodeSocketString',"")
+        self.outputs.new('DialogueSocket', "")
+        self.inputs.new('DialogueSocket',"")
         
-    # copy function is ran to initialize a copied node from
-    #   an existing one
-    def copy(self, node):
-        print("copied node", node)
+    #def copy(self, node):
+    #    print("copied node", node)
         
-    # free function is called when an existing node is deleted
-    def free(self):
-        print("Node removed", self)
+    #def free(self):
+    #    print("Node removed", self)
         
-    # draw method for drawing node UI just like any other
-    # NOTE: input sockets are drawn by their respective methods
-    #   but output ones DO NOT for some reason, do it manually
-    #   and connect the drawn value to the output socket
     def draw_buttons(self, context, layout):
-        # create a slider for int values
         layout.prop(self, 'Name')
         layout.prop(self, 'Target')
         layout.prop(self, 'Body')
     
-    # this method lets you design how the node properties
-    #   are drawn on the side panel (to the right)
-    #   if it is not defined, draw_buttons will be used instead
-    #def draw_buttons_ext(self, context, layout):
-    
-    #OPTIONAL
-    #we can use this function to dynamically define the label of
-    #   the node, however defining the bl_label explicitly overrides it
-    #def draw_label(self):
-    #   return "this label is shown"
-    
+class DialogueChoiceNode(CustomNode):
+    bl_idname = "DialogueChoiceNode"
+    bl_label = "Choice"
 
-# now to be able to see the nodes in the add node menu AND see it on the
-#   tool shelf (left panel) we need to define node categories and then
-#   register them, the rest is handled automagickally by blender
-# so first we import the utilities used for handling node categories
+    body : bpy.props.StringProperty(name="Body")
+
+    def init(self, context):
+        self.outputs.new('DialogueSocket', "")
+        self.inputs.new('DialogueSocket',"")
+
+    def update(self):
+        self.color = (0,1,0)
+        self.use_custom_color=False
+        self.width=200.0
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, 'body')
+
+
 import nodeitems_utils
 
-# now we can make our own category using the NodeCategory baseclass
-#   as before we first make a mixin class to save space
 class DialogueNodeCategory(nodeitems_utils.NodeCategory):
-    # define the classmethod that tells blender which node tree
-    #   the categories made with this class belong to (is visible to)
     @classmethod
     def poll(cls, context):
         return context.space_data.tree_type == 'DialogueNodeTree'
@@ -113,81 +100,43 @@ class DialogueNodeCategory(nodeitems_utils.NodeCategory):
 
 # make a list of node categories for registration
 node_categories = [
-    # NOTE: did not find documentation other then template script for it
-    # esentially:
-    #   we instantiate a new 'nodeitems_utils.NodeCategory' class, that
-    #   has been extended with a poll method that makes sure that the
-    #   category and node only shows up in the desired node tree
-    # The first argument is a string with its id we will use to access it by
-    # the second argument is the name displayed to the user
-    # the third argument is a list of (items) nodes that are under
-    #   that category, the list contains instances 'nodeitems_utils.NodeItem'
     DialogueNodeCategory("DIALOGUENODES", "Dialogue", items=[
-        # the nodes (items) in this category are instantiated in this list
-        #   with the 'nodeitems_utils.NodeItem' class, which can have
-        #   additional settings
-        # the first argument is the node class idname we want to add
-        # then there can be keyword arguments like label
-        # another argument can be a 'settings' keyword argument
-        #   that takes a dictionary that can override default values of all
-        #   properties
-        #   NOTE: use 'repr()' to convert the value to string IMPORTANT
-        nodeitems_utils.NodeItem("DialogueBodyNode",
-            label="Simple Input", settings={"intProp":repr(1.0)}),
-        # minimalistic node addition is like this
         nodeitems_utils.NodeItem("DialogueBodyNode"),
+        nodeitems_utils.NodeItem("DialogueChoiceNode")
         ]),
 ]
 
 
 
-#finally we register our classes so we can install as plugin
-#to that end we create a list of classes to be loaded and unloaded
 classes=(
         DialogueNodeTree,
+        DialogueSocket,
         DialogueBodyNode,
+        DialogueChoiceNode
     )
     
-# for loading we define the registering of all defined classes
 def register():
-    # we register all our classes into blender
     for cls in classes:
         bpy.utils.register_class(cls)
-    # we register the node categories with the node tree
-    # the first argument is a string that is the idname for this collection
-    #   of categories
-    # the second is the actual list of node categories to be registered under
-    #   this name
+
     nodeitems_utils.register_node_categories("DIALOGUE_NODES", node_categories)
 
 
 # for unloading we define the unregistering of all defined classes
 def unregister():
-    # we unregister our node categories first
     nodeitems_utils.unregister_node_categories("DIALOGUE_NODES")
-    # then we unregister all classes from the blender
+
     for cls in classes:
         bpy.utils.unregister_class(cls)
 
 def UnregisterDialogueTree():
     unregister()
 
-# finally we make it runnable in the text editor for quick testing
 def RegisterDialogueTree():
-    # during test running there is a bug where registering or adding
-    #   references to certain groups and categories cannot override
-    #   existing ones, here is a workaround
-    # we enter a try..finally block
     try:
-        # first try unregistering the existing category
-        # WARNING: ALWAYS triple check that you unload the correct
-        #   things in this block, as it will not raise errors
         nodeitems_utils.unregister_node_categories("DIALOGUE_NODES")
     except:
-        print("No need to unload DIALOGUE_NODES apparently.")
+        pass
 
-    # finally, wether it suceeded or not, we can now register it again
-    #   this essentially reloads existing/register changes made
-    #   and thanks to the nature of the finally block, is always run    
     register()
         

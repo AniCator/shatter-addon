@@ -25,12 +25,19 @@ import subprocess
 import copy
 import uuid
 
-from threading import Timer
+from threading import Timer, active_count
 
 collision_types = {
     "shatter_collision_triangle" : "triangle",
     "shatter_collision_aabb" : "aabb",
     "shatter_collision_plane" : "plane"
+}
+
+light_types = {
+    "POINT" : "0",
+    "SUN" : "2",
+    "SPOT" : "1",
+    "AREA" : "3"
 }
 
 def GetTexture(obj):
@@ -156,6 +163,11 @@ class SLS_PT_ShatterObjectProperties(bpy.types.Panel):
 def DrawText2D(color,position, text):
     font_id = 0
     blf.position(font_id, position[0], position[1], 0)
+    blf.color(font_id, 0.0, 0.0, 0.0, 0.75)
+    blf.size(font_id, 20, 72)
+    blf.draw(font_id, text)
+
+    blf.position(font_id, position[0] - 1.0 , position[1] + 1.0, 0)
     blf.color(font_id, color[0], color[1], color[2], color[3])
     blf.size(font_id, 20, 72)
     blf.draw(font_id, text)
@@ -228,8 +240,8 @@ def DrawEntityLinks():
             DrawEntityLinkForObject(obj)
         return
 
-    for obj in bpy.context.scene.objects:
-        DrawEntityLinkForObject(obj)
+    #for obj in bpy.context.scene.objects:
+    #    DrawEntityLinkForObject(obj)
 
 def DrawEntityTexts():
     if len(bpy.context.selected_objects) > 0:
@@ -356,6 +368,10 @@ class SLSS_UL_ObjectList(bpy.types.UIList):
         elif self.layout_type in {'GRID'}:
             pass
 
+class BoundsProperty(bpy.types.PropertyGroup):
+    minimum: FloatVectorProperty()
+    maximum: FloatVectorProperty()
+
 class DefinitionType(bpy.types.PropertyGroup):
     type: StringProperty( default="string")
 
@@ -367,8 +383,35 @@ class DefinitionType(bpy.types.PropertyGroup):
     value_o: PointerProperty(type=bpy.types.Object)
     value_c: CollectionProperty(type=ObjectValueItem)
     value_c_index: IntProperty(default=0)
+    value_bd: PointerProperty(type=BoundsProperty)
+    value_falloff: EnumProperty(
+        items=(
+            ("inversesqr", "Inverse Square", ""),
+            ("linear", "Linear", ""),
+            ("none", "None", "")
+        ),
+        name="Falloff Type",
+        description="Determines how the volume of a sound is modulated based on its distance to the listener."
+        )
+    value_bus: EnumProperty(
+        items=(
+            ("0", "SFX", ""),
+            ("1", "Dialogue", ""),
+            ("2", "Music", ""),
+            ("3", "UI", ""),
+            ("4", "Auxilery3", ""),
+            ("5", "Auxilery4", ""),
+            ("6", "Auxilery5", ""),
+            ("7", "Auxilery6", ""),
+            ("8", "Auxilery7", ""),
+            ("9", "Auxilery8", ""),
+            ("10", "Master", "")
+        ),
+        name="Bus Type",
+        description="Determines which sound bus will be picked for a sound."
+        )
 
-def GetPropertyValue(prop):
+def GetPropertyValue(obj, prop):
     if prop.type == "string":
         return prop.value_s
     elif prop.type == "float":
@@ -388,16 +431,59 @@ def GetPropertyValue(prop):
         result = []
         if prop.name == "outputs":
             for item in prop.value_c:
+                if item.value == None:
+                    continue
+
                 result.append({"name" : item.name, "target" : item.value.name,"input" : item.extra})
             return result
         else:
             for item in prop.value_c:
+                if item.value == None:
+                    continue
+
                 result.append(item.value.name)
             return result
+    elif prop.type == "bounds":
+        return VectorToString(prop.value_bd.minimum) + "," + VectorToString(prop.value_bd.maximum)
+    elif prop.type == "auto_bounds":
+        if(obj.type != "EMPTY"):
+            maximum = obj.dimensions * 0.5
+        else:
+            maximum = obj.empty_display_size * obj.scale
+
+        minimum = -maximum
+        return VectorToString(minimum) + "," + VectorToString(maximum)
+    elif prop.type == "auto_float":
+        if(obj.type != "EMPTY"):
+            value = min(obj.dimensions) * 0.5
+        else:
+            value = obj.empty_display_size * min(obj.scale)
+        
+        return str(value)
+    elif prop.type == "falloff":
+        return str(prop.value_falloff)
+    elif prop.type == "bus":
+        return str(prop.value_bus)
     else:
         return None
 
+ValidDisplayTypes = [
+        "string",
+        "float",
+        "vector",
+        "int",
+        "bool",
+        "entity",
+        "entities",
+        "bounds",
+        "falloff",
+        "bus"
+    ]
+
 def DisplayProperty(layout, kv):
+    if kv.type not in ValidDisplayTypes:
+        return
+
     row = layout.row()
     split = row.split(factor=0.25)
     
@@ -422,8 +508,25 @@ def DisplayProperty(layout, kv):
         col.operator("object.shatter_object_add", icon='ADD', text="")
         col.operator("object.shatter_object_remove", icon='REMOVE', text="")
         col.operator("object.shatter_object_duplicate", icon='DUPLICATE', text="")
+    elif kv.type == "bounds":
+        split.prop(kv.value_bd, "minimum", text="")
+        split.prop(kv.value_bd, "maximum", text="")
+    elif kv.type == "falloff":
+        split.prop(kv, "value_falloff", text="")
+    elif kv.type == "bus":
+        split.prop(kv, "value_bus", text="")
     else:
         split.label(text="(read-only)")
+
+
+
+def GetLightType(type):
+    if type == "light":
+        return "OUTLINER_OB_LIGHT"
+    elif type == "sound":
+        return "PLAY_SOUND"
+
+    return "PROP_PROJECTED"
 
 class SLS_PT_ShatterObject(bpy.types.Panel):
     bl_label = "Shatter Object"
@@ -456,7 +559,11 @@ class SLS_PT_ShatterObject(bpy.types.Panel):
             return
 
         row = layout.row()
-        row.prop(obj, "shatter_type")
+
+        icontype = GetLightType(obj.shatter_type)
+
+        row.prop_search(obj, "shatter_type", bpy.context.scene, "shatter_object_types", text="Type", icon=icontype)
+        # row.prop(obj, "shatter_type")
 
         if obj.shatter_type == "custom":
             row = layout.row()
@@ -588,25 +695,29 @@ def ParseObject(operator,context,exported, obj, recurse = True, parent = None):
             view_collection = context.view_layer.layer_collection.children[collection.name]
             if view_collection.hide_viewport == True or collection.hide_render == True:
                 return
-    
+
     GenerateAsset(operator,context,exported,obj)
 
     shatter_name = obj.get("shatter_name", obj.name)
-    shatter_type = obj.shatter_type
+
+    if obj.type == "LIGHT":
+        obj.shatter_type = "light"
+    
     if obj.type == "EMPTY":
         if obj.instance_type == "COLLECTION" and recurse:
-            print("Collection: " + obj.name + " (" + str(len(obj.instance_collection.objects)) + ")")
+            # print("Collection: " + obj.name + " (" + str(len(obj.instance_collection.objects)) + ")")
 
             if len(obj.shatter_prefab) > 0:
-                print("Prefab path: " + obj.shatter_prefab)
+                # print("Prefab path: " + obj.shatter_prefab)
                 obj.shatter_type = "level"
             else:
                 for child in obj.instance_collection.objects:
                     ParseObject(operator,context,exported,child, False, obj)
                 return
-            print("End of Collection: " + obj.name)
+            # print("End of Collection: " + obj.name)
         else:
-            print("Unknown empty type. (" + obj.instance_type + ")")
+            print("Unknown empty type. (" + obj.name + ")")
+
 
     if len(obj.shatter_type) > 0:
         # print("Shatter Type: " + obj.shatter_type)
@@ -637,7 +748,7 @@ def ParseObject(operator,context,exported, obj, recurse = True, parent = None):
             return
 
         if is_level:
-            print("Prefab sub-level " + obj.shatter_prefab)
+            # print("Prefab sub-level " + obj.shatter_prefab)
             entity["path"] = obj.shatter_prefab + ".sls"
 
         undefined_type = entity["type"] not in context.scene.shatter_definitions
@@ -651,12 +762,17 @@ def ParseObject(operator,context,exported, obj, recurse = True, parent = None):
 
         # Fetch the mesh name if we're a mesh object.
         mesh_type = False
+        light_type = False
         if (not undefined_type or entity["type"] == "mesh") and obj.type == "MESH":
             # print("Mesh " + obj.data.name)
             entity["mesh"] = obj.data.name.lower()
             mesh_type = True
+        elif undefined_type and obj.type == "LIGHT" and obj.data.type != "SUN":
+            mesh_type = False
+            light_type = True
         elif not is_level and undefined_type:
             # Type likely isn't supported. Skip.
+            print("Unsupported type " + entity["type"])
             return
 
         if not is_level and mesh_type:
@@ -691,9 +807,21 @@ def ParseObject(operator,context,exported, obj, recurse = True, parent = None):
 
             entity["rotation"] = VectorToString(rotation)
             # entity["rotation"] = "0 0 0"
-            entity["scale"] = VectorToString(obj.scale)
 
-        if not is_level and obj.shatter_type != "custom" and obj.type != "EMPTY":
+            if not light_type:
+                entity["scale"] = VectorToString(obj.scale)
+
+        if not is_level and light_type and obj.data.type != "SUN":
+            entity["light_type"] = light_types[obj.data.type]
+            entity["radius"] = str(obj.data.shadow_soft_size)
+            entity["intensity"] = str(obj.data.energy * 10.0)
+            entity["color"] = VectorToString(obj.data.color)
+
+            if obj.data.type == "SPOT":
+                entity["angle_inner"] = str(obj.data.spot_blend * obj.data.spot_size)
+                entity["angle_outer"] = str(obj.data.spot_size)
+
+        if not is_level and obj.shatter_type != "custom" and obj.type != "EMPTY" and not light_type:
             entity["color"] = VectorToString(obj.color)
             entity["visible"] = "1" if obj.shatter_visible else "0"
             entity["collision"] = "1" if obj.shatter_collision else "0"
@@ -713,10 +841,9 @@ def ParseObject(operator,context,exported, obj, recurse = True, parent = None):
             entity[pair.name] = pair.value
 
         for pair in obj.shatter_properties:
-            value = GetPropertyValue(pair)
+            value = GetPropertyValue(obj, pair)
             if value != None:
                 entity[pair.name] = value
-
 
         exported["entities"].append(entity)
 
@@ -748,18 +875,6 @@ def ExportObjects(operator,context):
         sky_night_asset["path"] = "Textures/MilkyWayPanorama.png"
         exported["assets"].append(sky_night_asset)
 
-        default_shader = {}
-        default_shader["type"] = "shader"
-        default_shader["name"] = "DefaultGrid"
-        default_shader["path"] = "Shaders/DefaultGrid"
-        exported["assets"].append(default_shader)
-
-        default_texture_shader = {}
-        default_texture_shader["type"] = "shader"
-        default_texture_shader["name"] = "DefaultTextured"
-        default_texture_shader["path"] = "Shaders/DefaultTextured"
-        exported["assets"].append(default_texture_shader)
-
         sky = {}
         sky["name"] = "sky"
         sky["type"] = "sky"
@@ -770,6 +885,18 @@ def ExportObjects(operator,context):
         sky["rotation"] = "0 0 0"
         sky["scale"] = "1900 1900 1900"
         exported["entities"].append(sky)
+
+    default_shader = {}
+    default_shader["type"] = "shader"
+    default_shader["name"] = "DefaultGrid"
+    default_shader["path"] = "Shaders/DefaultGrid"
+    exported["assets"].append(default_shader)
+
+    default_texture_shader = {}
+    default_texture_shader["type"] = "shader"
+    default_texture_shader["name"] = "DefaultTextured"
+    default_texture_shader["path"] = "Shaders/DefaultTextured"
+    exported["assets"].append(default_texture_shader)
 
     for obj in objects:
         ParseObject(operator,context,exported,obj)
@@ -908,7 +1035,6 @@ class SLS_PT_ShatterScene(bpy.types.Panel):
         row = layout.row()
         row.label(text="Options")
         row = layout.row()
-        row.prop(scene, "shatter_export_prefabs")
         row.prop(scene, "shatter_export_meshes")
         #row = layout.row()
         row.prop(scene, "shatter_export_textures")
@@ -924,7 +1050,7 @@ class SLS_PT_ShatterScene(bpy.types.Panel):
         row = layout.row()
         row.operator("shatter.export_scene_run_world", icon="PLAY")
 
-        json_only = scene.shatter_export_prefabs == False and scene.shatter_export_meshes == False and scene.shatter_export_textures == False
+        json_only = scene.shatter_export_meshes == False and scene.shatter_export_textures == False
         if json_only:
             row = layout.row()
             row.label(text="Only the main scene will be exported. (JSON-only)")
@@ -967,7 +1093,9 @@ def ApplyDefinition(obj, clear=True):
     if not hasattr(obj, "shatter_type"):
         return
 
-    if obj.shatter_type not in bpy.types.Scene.shatter_definitions:
+    type = obj.shatter_type
+
+    if type not in bpy.types.Scene.shatter_definitions:
         if clear == True:
             obj.shatter_properties.clear()
         return
@@ -975,7 +1103,7 @@ def ApplyDefinition(obj, clear=True):
     if clear == True:
         obj.shatter_properties.clear()
 
-    definitions = bpy.types.Scene.shatter_definitions[obj.shatter_type]
+    definitions = bpy.types.Scene.shatter_definitions[type]
 
     # Check which definitions are missing.
     # Copy the existing property names.
@@ -989,7 +1117,7 @@ def ApplyDefinition(obj, clear=True):
         accounted_props = []
         for definition in definitions:
             for prop in obj.shatter_properties:
-                if definition["key"] == prop.name:
+                if definition["key"] == prop.name and definition["type"] == prop.type:
                     accounted_props.append(prop.name)
 
         unaccounted_props = []
@@ -1006,6 +1134,8 @@ def ApplyDefinition(obj, clear=True):
         item = obj.shatter_properties.add()
         item.name = definition["key"]
         item.type = definition["type"]
+        #if item.type == "string" and "subtype" in definition:
+        #    item.value_s = StringProperty(subtype=definition["subtype"])
 
 def OnTypeUpdate(self,context):
     ApplyDefinition(self)
@@ -1034,6 +1164,7 @@ class LoadDefinitions(bpy.types.Operator):
                 entity_types.append(("mesh", "Mesh",""))
                 entity_types.append(("level", "Level",""))
                 entity_types.append(("custom", "Custom",""))
+                entity_types.append(("light", "Light",""))
 
                 native_types = len(entity_types)
 
@@ -1044,6 +1175,9 @@ class LoadDefinitions(bpy.types.Operator):
 
                         # Add the entity's name to the type array.
                         entity_types.append((item["name"],item["name"].capitalize(), description))
+
+                        if item["name"] not in entity_meta:
+                            entity_meta[item["name"]] = []
 
                         # Get all the additional properties.
                         for meta in item.items():
@@ -1061,16 +1195,19 @@ class LoadDefinitions(bpy.types.Operator):
                             data["type"] = type_info[0]
 
                             if len(type_info) > 1:
-                                colors = type_info[1].lstrip('(').rstrip(')').split(',')
-                                colors = [float(c) for c in colors]
+                                if data["type"] == "entities":
+                                    colors = type_info[1].lstrip('(').rstrip(')').split(',')
+                                    colors = [float(c) for c in colors]
 
-                                if len(colors) == 3:
-                                    colors.append(1.0)
+                                    if len(colors) == 3:
+                                        colors.append(1.0)
 
-                                data["debug_color"] = tuple(colors)
-
-                            if item["name"] not in entity_meta:
-                                entity_meta[item["name"]] = []
+                                    data["debug_color"] = tuple(colors)
+                                elif data["type"] == "string":
+                                    if type_info[1] == "dir":
+                                        data["subtype"] = "DIR_PATH"
+                                    elif type_info[1] == "file":
+                                        data["subtype"] = "FILE_PATH"
 
                             entity_meta[item["name"]].append(data)
 
@@ -1093,6 +1230,12 @@ class LoadDefinitions(bpy.types.Operator):
                 if bpy.types.Scene.shatter_definitions:
                     del bpy.types.Scene.shatter_definitions
                 bpy.types.Scene.shatter_definitions = entity_meta
+
+                bpy.context.scene.shatter_object_types.clear()
+                for item in entity_types:
+                    sceneitem = bpy.context.scene.shatter_object_types.add()
+                    sceneitem.name = item[0]
+                    sceneitem.value = item[1]
 
                 additional_types = len(entity_types) - native_types
                 print(str(additional_types) + " additional types found.")
@@ -1132,6 +1275,7 @@ def GetDummyEntityList():
     entity_types.append(("mesh", "Mesh",""))
     entity_types.append(("level", "Level",""))
     entity_types.append(("custom", "Custom",""))
+    entity_types.append(("light", "Light",""))
 
     #for i in range(0,1000):
     #    entity_types.append(("unknown", "Unknown descriptor",""))
@@ -1140,10 +1284,17 @@ def GetDummyEntityList():
 
 # Getters are required if a setter exists.
 def GetPrefab(self):
-    return self["shatter_prefab"]
+    if "shatter_prefab" in self:
+        return self["shatter_prefab"]
+        
+    return ""
 
 # Used to set the prefab path to its relative directory
 def SetPrefab(self, value):
+    if value.startswith("Levels/"):
+        self["shatter_prefab"] = value
+        return
+    
     game_path = bpy.path.abspath(bpy.context.scene.shatter_game_path)
 
     # Get the path relative to the game path.
@@ -1170,6 +1321,7 @@ classes = (
     ShatterObjectDuplicate,
     ShatterObjectAdd,
     ShatterObjectRemove,
+    BoundsProperty,
     DefinitionType,
 
     SLS_PT_ShatterScene,
@@ -1193,6 +1345,7 @@ def RegisterKeyConfig():
     if kc:
         km = wm.keyconfigs.addon.keymaps.new(name='3D View', space_type='VIEW_3D')
         kmi = km.keymap_items.new(ShatterObjectLink.bl_idname, type='D', value='RELEASE', ctrl=True, alt=True)
+        addon_keymap.append((km, kmi))
 
 def UnregisterKeyConfig():
     for km, kmi in addon_keymap:
@@ -1212,7 +1365,6 @@ def RegisterScenePanels():
     Scene.shatter_export_path = StringProperty(name="Levels Path",description="Export location of the main level file", subtype="DIR_PATH")
     Scene.shatter_game_path = StringProperty(name="Game Path",description="Location of the game's executable", subtype="DIR_PATH", update=OnGamePathUpdate)
     Scene.shatter_game_executable = StringProperty(name="Game Executable",description="Name of the game's executable")
-    Scene.shatter_export_prefabs = BoolProperty(name="Prefabs",description="Determines whether proxies marked as prefabs should be exported",default=False)
     Scene.shatter_export_meshes = BoolProperty(name="Meshes",description="Determines whether meshes should be exported",default=True)
     Scene.shatter_export_textures = BoolProperty(name="Textures",description="Determines whether textures should be exported",default=True)
 
@@ -1220,6 +1372,8 @@ def RegisterScenePanels():
 
     Scene.shatter_definitions = []
     Scene.shatter_previous_object = None
+
+    Scene.shatter_object_types = CollectionProperty(type = KeyValueItem)
 
     # Register object properties.
     Object = bpy.types.Object
@@ -1234,8 +1388,7 @@ def RegisterScenePanels():
         description="Should this object be visible in the engine?"
         )
 
-    Object.shatter_type = EnumProperty(
-        items=GetDummyEntityList(),
+    Object.shatter_type = StringProperty(
         name="Entity",
         description="",
         update=OnTypeUpdate
@@ -1293,7 +1446,6 @@ def UnregisterScenePanels():
     del Scene.shatter_export_path
     del Scene.shatter_game_path
     del Scene.shatter_game_executable
-    del Scene.shatter_export_prefabs
     del Scene.shatter_export_meshes
     del Scene.shatter_export_textures
 

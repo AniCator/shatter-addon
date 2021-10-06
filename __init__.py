@@ -12,17 +12,17 @@ import bpy
 
 from . scene_panel import RegisterScenePanels, UnregisterScenePanels
 
-# from . dialogue_node_tree import RegisterDialogueTree, UnregisterDialogueTree
+from . dialogue_node_tree import RegisterDialogueTree, UnregisterDialogueTree
 
 def register():
     RegisterScenePanels()
-    # RegisterDialogueTree()
+    RegisterDialogueTree()
 
 
 
 def unregister():
     UnregisterScenePanels()
-    # UnregisterDialogueTree()
+    UnregisterDialogueTree()
 
 
 if __name__ == "__main__":

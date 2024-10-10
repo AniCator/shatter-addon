@@ -30,7 +30,8 @@ from threading import Timer, active_count
 collision_types = {
     "shatter_collision_triangle" : "triangle",
     "shatter_collision_aabb" : "aabb",
-    "shatter_collision_plane" : "plane"
+    "shatter_collision_plane" : "plane",
+    "shatter_collision_sphere" : "sphere"
 }
 
 light_types = {
@@ -56,20 +57,35 @@ def GetTexture(obj):
 
                     # Check if an image node is assigned to the Base Color input.
                     try:
-                        filepath = principled.inputs[0].links[0].from_node.image.filepath
+                        # filepath = principled.inputs[0].links[0].from_node.image.filepath
+                        base_color_index = principled.inputs.find("Base Color")
+                        current_node_socket = principled.inputs[base_color_index]
+                        for i in range(0,5):
+                            current_node = current_node_socket.links[0].from_node
+                            if(hasattr(current_node, 'image')):
+                                filepath = current_node.image.filepath
+                                print(filepath)
+                                break;
+
+                            current_node_socket = current_node.inputs[0]
 
                     # If not, check if it is the Shatter Default material configuration.
-                    except:
+                    except Exception as e:
+                        print("uh oh: " + str(e))
                         multiply_node1 = principled.inputs[0].links[0].from_node.inputs[1]
                         multiply_node2 = multiply_node1.links[0].from_node
                         image_node = multiply_node2.inputs[1].links[0].from_node
                         filepath = image_node.image.filepath
+
+                    if len(filepath) == 0:
+                        return None
                     
                     filepath = bpy.path.abspath(filepath)
                     split_name = os.path.splitext(os.path.basename(filepath))
                     system_name = split_name[0]
                     name = system_name.lower()
                     extension = split_name[1].lower()
+                    
                     return {
                         "name" : name,
                         "extension" : extension,
@@ -82,10 +98,36 @@ def GetTexture(obj):
     return None
 
 def ExportTexture(context, texture, asset):
+    if len(texture['path']) == 0:
+        print("Texture path not set. (" + texture["name"] + ")")
+        return
     try:
-        shutil.copy(texture['path'], bpy.path.abspath(context.scene.shatter_game_path + asset["path"]))
+        input_path = texture['path']
+        output_path = bpy.path.abspath(context.scene.shatter_game_path + asset["path"])
+        output_dir = os.path.dirname(output_path)
+        if not os.path.isdir(output_dir):
+            os.mkdir(output_dir)
+
+        shutil.copy(input_path, output_path)
+    except Exception as e:
+        print("Failed to export texture. (" + str(e) + ")");
+
+def GetRelativePath(value):
+    try:
+        game_path = bpy.path.abspath(bpy.context.scene.shatter_game_path)
+
+        # Get the path relative to the game path.
+        value = bpy.path.relpath(bpy.path.abspath(value), start=game_path)
     except:
-        print("Failed to export texture.")
+        print("Invalid path \"" + value + "\".")
+
+    # Remove the extra slashes at the start.
+    value = value.lstrip('/')
+
+    # Replace the backslashes with forward slashes if needed.
+    value = value.replace('\\','/')
+
+    return value
 
 class KeyValueItem(PropertyGroup):
     value : StringProperty( name="Value", description="Value of the entry", default="")
@@ -164,12 +206,12 @@ def DrawText2D(color,position, text):
     font_id = 0
     blf.position(font_id, position[0], position[1], 0)
     blf.color(font_id, 0.0, 0.0, 0.0, 0.75)
-    blf.size(font_id, 20, 72)
+    blf.size(font_id, 20)
     blf.draw(font_id, text)
 
     blf.position(font_id, position[0] - 1.0 , position[1] + 1.0, 0)
     blf.color(font_id, color[0], color[1], color[2], color[3])
-    blf.size(font_id, 20, 72)
+    blf.size(font_id, 20)
     blf.draw(font_id, text)
 
 def DrawText(color, position, text, offset=(0,0)):
@@ -183,13 +225,16 @@ def DrawText(color, position, text, offset=(0,0)):
     DrawText2D(color,position2D,text)
 
 def DrawLine(color, start, end):
-    shader = gpu.shader.from_builtin('3D_UNIFORM_COLOR')
+    shader = gpu.shader.from_builtin('UNIFORM_COLOR')
     batch = batch_for_shader(shader, 'LINES', {"pos": [start,end]})
     shader.bind()
     shader.uniform_float("color", color)
     batch.draw(shader)
 
 def DrawLinkRaw(obj, prop, location, color):
+    if obj.shatter_type not in bpy.context.scene.shatter_definitions:
+        return
+    
     for param in bpy.context.scene.shatter_definitions[obj.shatter_type]:
         if param["type"] == prop.type and param["key"] == prop.name:
             if "debug_color" in param:
@@ -234,6 +279,9 @@ def DrawEntityTextForObject(obj):
                     offset[1] -= 20
                 
                 if entity.value != None:
+                    if obj.shatter_type not in bpy.context.scene.shatter_definitions:
+                        continue
+
                     for param in scene.shatter_definitions[obj.shatter_type]:
                         if param["type"] == prop.type and param["key"] == prop.name:
                             if "debug_color" in param:
@@ -250,7 +298,7 @@ def DrawEntityTextForObject(obj):
         elif prop.type == "entity":
             entity = prop.value_o
 
-            if hasattr(entity.value, "location") == False:
+            if hasattr(entity, "location") == False:
                 continue
 
             if draw_label:
@@ -261,6 +309,10 @@ def DrawEntityTextForObject(obj):
             
             if entity != None:
                 text = entity.name
+
+                if obj.shatter_type not in bpy.context.scene.shatter_definitions:
+                    continue
+
                 for param in scene.shatter_definitions[obj.shatter_type]:
                     if param["type"] == prop.type and param["key"] == prop.name:
                         if "debug_color" in param:
@@ -274,8 +326,12 @@ def DrawEntityTextForObject(obj):
 
 # This function goes through all objects that have link properties and draws the links.
 def DrawEntityLinks():
-    if len(bpy.context.selected_objects) > 0:
-        for obj in bpy.context.selected_objects:
+    objects = bpy.context.selected_objects
+    if bpy.context.scene.shatter_links_drawall == True:
+        objects = bpy.context.visible_objects
+
+    if len(objects) > 0:
+        for obj in objects:
             DrawEntityLinkForObject(obj)
         return
 
@@ -302,9 +358,10 @@ def LinkToObject(target, link, clear=False):
                         print("Already linked.")
                         return
 
-                bpy.ops.object.shatter_object_add({"item" : prop})
-                item = prop.value_c[len(prop.value_c) - 1]
-                item.value = link
+                with bpy.context.temp_override(item=prop):
+                    bpy.ops.object.shatter_object_add()
+                    item = prop.value_c[len(prop.value_c) - 1]
+                    item.value = link
 
 def ClearLinksForObject(target):
     for prop in target.shatter_properties:
@@ -420,14 +477,26 @@ class SLSS_UL_ObjectList(bpy.types.UIList):
         elif self.layout_type in {'GRID'}:
             pass
 
+def GetFilePath(self):
+    if "value_file" in self:
+        return self["value_file"]
+    
+    return ""
+
+def SetFilePath(self, value):
+    value = GetRelativePath(value)
+    self["value_file"] = value
+
 class BoundsProperty(bpy.types.PropertyGroup):
     minimum: FloatVectorProperty()
     maximum: FloatVectorProperty()
 
 class DefinitionType(bpy.types.PropertyGroup):
     type: StringProperty( default="string")
+    subtype : StringProperty()
 
     value_s: StringProperty()
+    value_file: StringProperty(subtype="FILE_PATH", get=GetFilePath, set=SetFilePath)
     value_f: FloatProperty()
     value_i: IntProperty()
     value_b: BoolProperty()
@@ -465,6 +534,8 @@ class DefinitionType(bpy.types.PropertyGroup):
 
 def GetPropertyValue(obj, prop):
     if prop.type == "string":
+        if prop.subtype == "file":
+            return prop.value_file
         return prop.value_s
     elif prop.type == "float":
         return str(prop.value_f)
@@ -546,7 +617,10 @@ def DisplayProperty(layout, kv):
     split.label(text=kv.name)
 
     if kv.type == "string":
-        split.prop(kv, "value_s", text="")
+        if kv.subtype == "file":
+            split.prop(kv, "value_file", text="")
+        else:
+            split.prop(kv, "value_s", text="")
     elif kv.type == "float":
         split.prop(kv, "value_f", text="")
     elif kv.type == "vector" or kv.type == "color":
@@ -620,6 +694,39 @@ class SLS_PT_ShatterObject(bpy.types.Panel):
 
         row.prop_search(obj, "shatter_type", bpy.context.scene, "shatter_object_types", text="Type", icon=icontype)
         # row.prop(obj, "shatter_type")
+        if obj.shatter_type in bpy.context.scene.shatter_object_types:
+            description = [bpy.context.scene.shatter_object_types[obj.shatter_type].value]
+
+            if obj.shatter_type in bpy.context.scene.shatter_definitions:
+                output_line = ""
+                for entry in bpy.context.scene.shatter_definitions[obj.shatter_type]:
+                    first_entry = len(output_line) == 0
+                    if entry['type'] == "input":
+                        if not first_entry:
+                            output_line += ", "
+                        output_line += str(entry['key'])
+                if len(output_line) > 0:
+                    output_line = "Inputs: " + output_line
+                    description.append(output_line)
+
+                output_line = ""
+                for entry in bpy.context.scene.shatter_definitions[obj.shatter_type]:
+                    first_entry = len(output_line) == 0
+                    if entry['type'] == "output":
+                        if not first_entry:
+                            output_line += ", "
+                        output_line += str(entry['key'])
+                if len(output_line) > 0:
+                    output_line = "Outputs: " + output_line
+                    description.append(output_line)
+
+            for line in description:
+                # Ignore if we aren't actually displaying any information.
+                if len(description) == 1 and len(line) == 0:
+                    continue
+
+                row = layout.row()
+                row.label(text=line)
 
         if obj.shatter_type == "custom":
             row = layout.row()
@@ -634,6 +741,14 @@ class SLS_PT_ShatterObject(bpy.types.Panel):
                 row.prop(obj, "shatter_collision_type")
                 row = layout.row()
                 row.prop(obj, "shatter_collision_mobility")
+                row = layout.row()
+                row.prop(obj, "shatter_collision_damping")
+                row = layout.row()
+                row.prop(obj, "shatter_collision_friction")
+                row = layout.row()
+                row.prop(obj, "shatter_collision_restitution")
+                row = layout.row()
+                row.prop(obj, "shatter_collision_drag")
         
             row = layout.row()
             row.prop(obj, "shatter_shader_type")
@@ -650,10 +765,17 @@ class SLS_PT_ShatterObject(bpy.types.Panel):
             row = layout.row()
             row.prop(obj, "shatter_maximum_render_distance")
 
+            if len(obj.material_slots) > 0:
+                row = layout.row()
+                row.prop(obj.material_slots[0].material, "shatter_material")
+
 from io_scene_fbx import export_fbx_bin
 
 def VectorToString(vector):
     return str(format(vector[0],'f')) + ' ' + str(format(vector[1],'f')) + ' ' + str(format(vector[2],'f'))
+
+def Vector4ToString(vector):
+    return str(format(vector[0],'f')) + ' ' + str(format(vector[1],'f')) + ' ' + str(format(vector[2],'f')) + ' ' + str(format(vector[3],'f'))
 
 axis_forward = "-Z"
 axis_up = "Y"
@@ -717,12 +839,12 @@ def ExportAnimations(operator,context):
         'mesh_smooth_type': 'OFF', 
         'use_subsurf': False, 
         'use_mesh_edges': False, 
-        'use_tspace': False, 
+        'use_tspace': False,  # Export tangent space vectors
         'use_custom_props': False, 
         'add_leaf_bones': True, 
         'primary_bone_axis': 'Y', 
         'secondary_bone_axis': 'X', 
-        'use_armature_deform_only': True, 
+        'use_armature_deform_only': False, 
         'armature_nodetype': 'NULL', 
         'bake_anim': True, 
         'bake_anim_use_all_bones': True, 
@@ -764,6 +886,7 @@ def ExportAnimations(operator,context):
 def GenerateAsset(operator,context,exported,obj, armature = None):
     if obj.type == "MESH":
         asset_name = obj.data.name.lower()
+        
         if asset_name in generated_meshes:
             return
 
@@ -771,6 +894,9 @@ def GenerateAsset(operator,context,exported,obj, armature = None):
 
         if animation_only:
             asset_name += "anim"
+
+        if animation_only and armature is None:
+            return
 
         asset = {}
         asset["type"] = "mesh"
@@ -780,7 +906,7 @@ def GenerateAsset(operator,context,exported,obj, armature = None):
         generated_meshes.append(asset_name)
 
         texture = GetTexture(obj)
-        if texture != None and texture['name'] not in generated_textures:
+        if texture != None and texture['name'] not in generated_textures and animation_only != True:
             texture_asset = {}
             texture_asset["type"] = "texture"
             texture_asset["name"] = texture['name']
@@ -788,7 +914,7 @@ def GenerateAsset(operator,context,exported,obj, armature = None):
             exported["assets"].append(texture_asset)
             generated_textures.append(texture['name'])
 
-            if context.scene.shatter_export_textures == True and animation_only == False:
+            if context.scene.shatter_export_textures == True:
                 ExportTexture(context, texture, texture_asset)
 
         if context.scene.shatter_export_meshes == False and animation_only == False:
@@ -814,7 +940,7 @@ def GenerateAsset(operator,context,exported,obj, armature = None):
             'mesh_smooth_type': 'OFF', 
             'use_subsurf': False, 
             'use_mesh_edges': False, 
-            'use_tspace': False, 
+            'use_tspace': True,  # Export tangent space vectors
             'use_custom_props': False, 
             'add_leaf_bones': True, 
             'primary_bone_axis': 'Y', 
@@ -889,6 +1015,27 @@ def GetShader(obj, texture = None):
     
     return "DefaultGrid"
 
+def ParseNode(obj, entity):
+    if obj.type != "MESH":
+        return
+    
+    deps = bpy.context.evaluated_depsgraph_get()
+    eval = obj.evaluated_get(deps)
+
+    nodes = ""
+    for vertex in eval.data.vertices:
+        position = obj.matrix_world @ vertex.co
+        nodes += str(vertex.index) + "," + VectorToString(position) + ";"
+    
+    connections = ""
+    for edge in eval.data.edges:
+        connections += str(edge.vertices[0]) + "," + str(edge.vertices[1]) + ";"
+
+    entity["nodes"] = nodes
+    entity["edges"] = connections
+
+    return
+
 def ParseObject(operator,context,exported, obj, recurse = True, parent = None):
     if obj.shatter_export == False:
         return
@@ -903,7 +1050,8 @@ def ParseObject(operator,context,exported, obj, recurse = True, parent = None):
     if obj.type == "MESH" and obj.parent != None and obj.parent.type == "ARMATURE":
         armature = obj.parent
 
-    GenerateAsset(operator,context,exported,obj, armature)
+    if obj.shatter_type != "node": # Don't generate assets for nodes. (their mesh is stored directly in the level file for now)
+        GenerateAsset(operator,context,exported,obj, armature)
 
     shatter_name = obj.get("shatter_name", obj.name)
 
@@ -924,6 +1072,8 @@ def ParseObject(operator,context,exported, obj, recurse = True, parent = None):
             # print("End of Collection: " + obj.name)
         else:
             print("Unknown empty type. (" + obj.name + ")")
+            if "Limestone" in obj.name:
+                print("Lime")
 
 
     if len(obj.shatter_type) > 0:
@@ -934,12 +1084,12 @@ def ParseObject(operator,context,exported, obj, recurse = True, parent = None):
         if parent and parent.shatter_type == "level":
             name_prefix = parent.get("shatter_name", parent.name)
 
-        if obj.shatter_type != "level":
-            entity["name"] = name_prefix + shatter_name
-
-            if len(obj.shatter_uuid) == 0:
+        # Generate the unique identifier.
+        if len(obj.shatter_uuid) == 0:
                 obj.shatter_uuid = str( uuid.uuid4() )
 
+        if obj.shatter_type != "level":
+            entity["name"] = name_prefix + shatter_name
             entity["uuid"] = obj.shatter_uuid
 
         if obj.shatter_type != "custom":
@@ -959,7 +1109,7 @@ def ParseObject(operator,context,exported, obj, recurse = True, parent = None):
             entity["path"] = obj.shatter_prefab + ".sls"
             
             # Handle level UUIDs.
-            entity["uuid"] = "00000000-0000-0000-0000-000000000000"
+            entity["uuid"] = obj.shatter_uuid #"00000000-0000-0000-0000-000000000000"
 
         undefined_type = entity["type"] not in context.scene.shatter_definitions
 
@@ -984,8 +1134,17 @@ def ParseObject(operator,context,exported, obj, recurse = True, parent = None):
             # Type likely isn't supported. Skip.
             print("Unsupported type " + entity["type"])
             return
+        
+        if obj.shatter_type == "node" or obj.shatter_type == "rope":
+            ParseNode(obj,entity)
 
-        if not is_level and mesh_type:
+        HasMaterial = False
+        if not is_level and mesh_type and len(obj.material_slots) > 0:
+            if obj.material_slots[0].material is not None and len(obj.material_slots[0].material.shatter_material) > 0:
+                entity["material"] = str(obj.material_slots[0].material.shatter_material)
+                HasMaterial = True
+
+        if not HasMaterial and not is_level and mesh_type:
             entity["shader"] = "DefaultGrid"
 
             texture = GetTexture(obj)
@@ -1004,6 +1163,10 @@ def ParseObject(operator,context,exported, obj, recurse = True, parent = None):
             obj.color[0] = parent.color[0]
             obj.color[1] = parent.color[1]
             obj.color[2] = parent.color[2]
+            obj.color[3] = parent.color[3]
+        
+        if obj.parent:
+            entity["parent"] = obj.parent.name;
 
         if should_export_transform:
             position = copy.deepcopy(obj.location)
@@ -1034,7 +1197,13 @@ def ParseObject(operator,context,exported, obj, recurse = True, parent = None):
                 entity["angle_outer"] = str(obj.data.spot_size)
 
         if not is_level and obj.shatter_type != "custom" and obj.type != "EMPTY" and not light_type:
-            entity["color"] = VectorToString(obj.color)
+            if obj.color[3] > 200.0:
+                print("Light sphere value: " + Vector4ToString(obj.color))
+
+            if obj.color[3] != 1.0:
+                entity["color"] = Vector4ToString(obj.color)
+            else:
+                entity["color"] = VectorToString(obj.color)
             entity["visible"] = "1" if obj.shatter_visible else "0"
             entity["collision"] = "1" if obj.shatter_collision else "0"
             entity["collisiontype"] = collision_types[obj.shatter_collision_type]
@@ -1056,6 +1225,11 @@ def ParseObject(operator,context,exported, obj, recurse = True, parent = None):
                 if obj.shatter_collision_mobility == "shatter_collision_dynamic":
                     entity["static"] = "0"
                     entity["stationary"] = "0"
+
+            entity["damping"] = str(obj.shatter_collision_damping)
+            entity["friction"] = str(obj.shatter_collision_friction)
+            entity["restitution"] = str(obj.shatter_collision_restitution)
+            entity["drag"] = str(obj.shatter_collision_drag)
 
         if mesh_type and len(obj.shatter_animation) > 0:
             entity["animation"] = obj.shatter_animation
@@ -1142,13 +1316,18 @@ def ExportObjects(operator,context):
     exported["assets"].append(default_texture_shader)
 
     if context.scene.shatter_animation_only == False:
+        obj_index = 0 # Used to update the progress indicator.
         for obj in objects:
             ParseObject(operator,context,exported,obj)
+
+            # Update the progress indicator.
+            obj_index += 1
+            bpy.context.window_manager.progress_update((obj_index / len(objects)) * 0.97)
 
         print("Configured " + str(len(exported["assets"])) + " assets.")
         print("Configured " + str(len(exported["entities"])) + " entities.")
     else:
-        ExportAnimations(operator,context)
+         ExportAnimations(operator,context)
 
     if context.scene.shatter_animation_only == True:
         return {}
@@ -1164,10 +1343,15 @@ class ExportScene(bpy.types.Operator):
     bl_description = "Exports the current scene to a Shatter level file"
 
     def execute(self,context):
+        bpy.context.window_manager.progress_begin(0, 100)
+
         exported = ExportObjects(self,context)
 
         if(len(exported) == 0):
-            self.report({"INFO"}, "Exported geometry only.")
+            if context.scene.shatter_animation_only:
+                self.report({"INFO"}, "Exported animation only.")
+            else:
+                self.report({"INFO"}, "Exported geometry only.")
             return {'FINISHED'}
 
         export_path = context.scene.shatter_export_path + context.scene.name + ".sls"
@@ -1176,6 +1360,8 @@ class ExportScene(bpy.types.Operator):
 
         export_file = open(full_path, 'w')
         json.dump(exported, export_file, indent=4)
+
+        bpy.context.window_manager.progress_end()
 
         return {'FINISHED'}
 
@@ -1255,12 +1441,17 @@ class RunWorld(bpy.types.Operator):
 
         level_path = context.scene.shatter_export_path.removeprefix(context.scene.shatter_game_path)
 
-        subprocess.Popen([
+        command_list = [
             full_path, 
             "-world",level_path + context.scene.name, 
-            "-x", x, "-y", y, "-z", z
-            #"-dirx", dirx, "-diry", diry, "-dirz", dirz
-            ], cwd=working_directory)
+            "-x", x, "-y", y, "-z", z,
+            "-dirx", dirx, "-diry", diry, "-dirz", dirz
+        ]
+
+        if(context.scene.shatter_moveplayer == True):
+            command_list.append("-moveplayer")
+
+        subprocess.Popen(command_list, cwd=working_directory)
 
         return {'FINISHED'}
 
@@ -1293,6 +1484,7 @@ class SLS_PT_ShatterScene(bpy.types.Panel):
         row.prop(scene, "shatter_game_executable")
         row = layout.row()
         row.prop(scene, "shatter_export_path")
+
         row = layout.row()
         row.label(text="Options")
         row = layout.row()
@@ -1312,6 +1504,23 @@ class SLS_PT_ShatterScene(bpy.types.Panel):
         row = layout.row()
         row.prop(scene, "shatter_animation_only")
         row.enabled = True
+
+        # Additional startup options
+        row = layout.row()
+        col = row.column(align=True)
+        opt = col.row()
+        opt.label(text="Startup Options")
+
+        opt = col.row()
+        opt.prop(scene, "shatter_moveplayer")
+
+        # Editor options
+        col = row.column(align=True)
+        opt = col.row()
+        opt.label(text="Editor Options")
+
+        opt = col.row()
+        opt.prop(scene, "shatter_links_drawall")
 
         row = layout.row()
         row.operator("shatter.export_scene", icon="EXPORT")
@@ -1406,8 +1615,9 @@ def ApplyDefinition(obj, clear=True):
         item = obj.shatter_properties.add()
         item.name = definition["key"]
         item.type = definition["type"]
-        #if item.type == "string" and "subtype" in definition:
-        #    item.value_s = StringProperty(subtype=definition["subtype"])
+
+        if "subtype" in definition:
+            item.subtype = definition["subtype"]
 
 def OnTypeUpdate(self,context):
     ApplyDefinition(self)
@@ -1452,7 +1662,7 @@ class LoadDefinitions(bpy.types.Operator):
         for item in self.entity_types:
             sceneitem = bpy.context.scene.shatter_object_types.add()
             sceneitem.name = item[0]
-            sceneitem.value = item[1]
+            sceneitem.value = item[2]
 
         # Fix up some of the base types if they were corrupted
         for obj in context.scene.objects:
@@ -1529,9 +1739,9 @@ class LoadDefinitions(bpy.types.Operator):
                                     data["debug_color"] = tuple(colors)
                                 elif data["type"] == "string":
                                     if type_info[1] == "dir":
-                                        data["subtype"] = "DIR_PATH"
+                                        data["subtype"] = "dir"
                                     elif type_info[1] == "file":
-                                        data["subtype"] = "FILE_PATH"
+                                        data["subtype"] = "file"
 
                             self.entity_meta[item["name"]].append(data)
 
@@ -1540,7 +1750,20 @@ class LoadDefinitions(bpy.types.Operator):
                             if item["name"] not in self.entity_meta:
                                     self.entity_meta[item["name"]] = []
                         
+                            # Output list
                             self.entity_meta[item["name"]].append({"key" : "outputs", "type" : "entities", "debug_color" : (0.6, 0.1, 0.0, 1.0)})
+
+                            # Output meta-data
+                            for output in item["outputs"]:
+                                self.entity_meta[item["name"]].append({"key" : output, "type" : "output"})
+
+                        if "inputs" in item:
+                            if item["name"] not in self.entity_meta:
+                                    self.entity_meta[item["name"]] = []
+
+                            # Input meta-data
+                            for input in item["inputs"]:
+                                self.entity_meta[item["name"]].append({"key" : input, "type" : "input"})
 
                         if "transform" in item and item["transform"] == False:
                             if item["name"] not in self.entity_meta:
@@ -1590,22 +1813,15 @@ def GetPrefab(self):
 def SetPrefab(self, value):
     if value.startswith("Levels/"):
         self["shatter_prefab"] = value
+
+        # Strip the extension.
+        value = value.rstrip(".sls")
         return
     
-    game_path = bpy.path.abspath(bpy.context.scene.shatter_game_path)
-
-    # Get the path relative to the game path.
-    value = bpy.path.relpath(bpy.path.abspath(value), start=game_path)
-
-    # Remove the extra slashes at the start.
-    value = value.lstrip('/')
-
-    # Replace the backslashes with forward slashes if needed.
-    value = value.replace('\\','/')
+    value = GetRelativePath(value)
 
     # Strip the extension.
     value = value.rstrip(".sls")
-
     self["shatter_prefab"] = value
 
 classes = (
@@ -1678,6 +1894,12 @@ def RegisterScenePanels():
 
     Scene.shatter_object_types = CollectionProperty(type = KeyValueItem)
 
+    # Additional startup options
+    Scene.shatter_moveplayer = BoolProperty(name="Move Player",description="Move the player to the viewport location",default=False)
+
+    # Editor options
+    Scene.shatter_links_drawall = BoolProperty(name="Always show links",description="Displays links for every object, when disabled it only shows links for selected objects",default=True)
+
     # Register object properties.
     Object = bpy.types.Object
     Object.shatter_collision = BoolProperty(name="Collision",description="Enables collisions for this object.",default=True)
@@ -1685,11 +1907,17 @@ def RegisterScenePanels():
         items=(
             ("shatter_collision_triangle", "Triangle Mesh", "Use triangle mesh collision tests."),
             ("shatter_collision_aabb", "Bounding Box", "Use AABB collision tests."),
-            ("shatter_collision_plane", "Planar", "Use plane collision tests.")
+            ("shatter_collision_plane", "Planar", "Use plane collision tests."),
+            ("shatter_collision_sphere", "Spherical", "Use spherical collision tests.")
         ),
         name="Collision Type",
         description="Determines how objects interact with this objects in the physics engine."
         )
+    
+    Object.shatter_collision_damping = FloatProperty(name="Damping", default=1.0)
+    Object.shatter_collision_friction = FloatProperty(name="Friction", default=0.5)
+    Object.shatter_collision_restitution = FloatProperty(name="Restitution", default=1.0)
+    Object.shatter_collision_drag = FloatProperty(name="Drag", default=1.0)
 
     Object.shatter_collision_mobility = EnumProperty(
         items=(
@@ -1726,7 +1954,7 @@ def RegisterScenePanels():
     Object.shatter_animation = StringProperty(name="Animation",description="Animation that this mesh should play by default")
     Object.shatter_animation_playrate = FloatProperty(name="Play Rate",description="Animation play rate",default=1.0,min=0.0,soft_min=0.0,soft_max=10.0)
 
-    Object.shatter_maximum_render_distance = FloatProperty(name="Maximum Render Distance",description="Distance from the camera at which the object should be culled, infinite when negative.",default=-1.0,min=-1.0)
+    Object.shatter_maximum_render_distance = FloatProperty(name="Maximum Render Distance",description="Distance from the camera at which the object should be culled, infinite when negative",default=-1.0,min=-1.0)
 
     Object.shatter_key_values = CollectionProperty(type = KeyValueItem)
     Object.shatter_key_value_index = IntProperty(name="Key Value Index", default=0)
@@ -1734,10 +1962,13 @@ def RegisterScenePanels():
     Object.shatter_properties = CollectionProperty(type = DefinitionType)
 
     Object.shatter_visible = BoolProperty(name="Visible",description="Should this object be visible in the engine?",default=True)
-    Object.shatter_export = BoolProperty(name="Export",description="When disabled, this object is never exported.",default=True)
+    Object.shatter_export = BoolProperty(name="Export",description="When disabled, this object is never exported",default=True)
 
-    Object.shatter_prefab = StringProperty(name="Prefab",description="Where to look for the prefab if relevant.", subtype="FILE_PATH", get=GetPrefab, set=SetPrefab)
-    Object.shatter_uuid = StringProperty(name="UUID",description="Unique identifier for the Shatter engine.")
+    Object.shatter_prefab = StringProperty(name="Prefab",description="Where to look for the prefab if relevant", subtype="FILE_PATH", get=GetPrefab, set=SetPrefab)
+    Object.shatter_uuid = StringProperty(name="UUID",description="Unique identifier for the Shatter engine")
+
+    Material = bpy.types.Material
+    Material.shatter_material = StringProperty(name="Material",description="Name that is used to refer to this material within the engine itself")
 
     Scene.DrawHandler = bpy.types.SpaceView3D.draw_handler_add(DrawEntityLinks, (), 'WINDOW', 'POST_VIEW')
     Scene.TextHandler = bpy.types.SpaceView3D.draw_handler_add(DrawEntityTexts, (), 'WINDOW', 'POST_PIXEL')
@@ -1745,7 +1976,7 @@ def RegisterScenePanels():
     bpy.app.handlers.load_post.append(InitializeDefinitions)
 
     # Use a timer to prod the operator, it's not possible to execute it straight away.
-    Timer(0.1, InitializeDefinitions, ["test"]).start()
+    # Timer(0.1, InitializeDefinitions, ["test"]).start()
 
 def UnregisterScenePanels():
     # Unregister all of the classes
@@ -1777,12 +2008,21 @@ def UnregisterScenePanels():
 
     del Scene.shatter_definitions
     del Scene.shatter_previous_object
+    del Scene.shatter_object_types
+
+    del Scene.shatter_moveplayer
+    del Scene.shatter_links_drawall
 
     Object = bpy.types.Object
 
     # Unregister object properties.
     del Object.shatter_collision
     del Object.shatter_collision_type
+    del Object.shatter_collision_damping
+    del Object.shatter_collision_friction
+    del Object.shatter_collision_restitution
+    del Object.shatter_collision_drag
+
     del Object.shatter_collision_mobility
     del Object.shatter_type
     del Object.shatter_type_custom
@@ -1804,3 +2044,8 @@ def UnregisterScenePanels():
 
     del Object.shatter_prefab
     del Object.shatter_uuid
+
+    Material = bpy.types.Material
+
+    # Unregister material properties.
+    del Material.shatter_material
